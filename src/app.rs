@@ -162,9 +162,14 @@ impl App {
         let report = match backend::execute_plan(&plan, runner, signals, paths) {
             Ok(report) => report,
             Err(err) => {
-                self.started.clear();
-                self.private_hostapd = false;
-                self.fail_apply(err.clone());
+                if self.running {
+                    self.wizard.set_error(err.clone());
+                    self.notice = err.clone();
+                } else {
+                    self.started.clear();
+                    self.private_hostapd = false;
+                    self.fail_apply(err.clone());
+                }
                 return Err(err);
             }
         };
@@ -963,6 +968,56 @@ mod tests {
             .calls
             .iter()
             .any(|command| command.program == "systemctl"));
+        assert_eq!(app.status, HotspotStatus::Stopped);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_reapply_keeps_the_private_hostapd_stop_path() {
+        let dir = scratch_dir();
+        let paths = test_paths(&dir);
+        fs::create_dir_all(paths.hostapd_config.parent().unwrap()).unwrap();
+        fs::write(&paths.hostapd_config, "original-config\n").unwrap();
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::create_dir_all(paths.hostapd_backup()).unwrap();
+        let mut app = App::from_parts(
+            BackendKind::ExistingHostapd,
+            sample_interfaces(),
+            dir.join("profile.json"),
+            Some(sample_profile()),
+        );
+        app.apply_hotspot(
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        app.started.push(StartedProc {
+            pid: 55,
+            name: "hostapd".to_string(),
+        });
+        let error = app
+            .apply_hotspot(
+                &mut ScriptedRunner::with_results(vec![Err("link failed".to_string())]),
+                &mut RecordedSignals::default(),
+                &paths,
+            )
+            .unwrap_err();
+        assert!(error.contains("The backend rejected the setting."));
+        assert!(app.running);
+        assert!(app.private_hostapd);
+        assert!(app.started.iter().any(|item| item.pid == 55));
+        let mut runner = ScriptedRunner::default();
+        let mut signals = RecordedSignals {
+            names: vec![(55, "hostapd".to_string())],
+            ..RecordedSignals::default()
+        };
+        app.stop_hotspot(&mut runner, &mut signals, &paths).unwrap();
+        assert!(!runner
+            .calls
+            .iter()
+            .any(|command| command.program == "systemctl"));
+        assert_eq!(signals.pids, vec![55]);
         assert_eq!(app.status, HotspotStatus::Stopped);
         let _ = fs::remove_dir_all(&dir);
     }
