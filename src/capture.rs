@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-pub const CAPTURE_WARNING: &str = "Packet capture reads frames on the hotspot interface only. The program does not change packet contents. Confirm again to start capture.";
+pub const CAPTURE_WARNING: &str = "Packet capture reads frames on the hotspot interface only. The program does not change packet contents. Press Enter to start capture.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapturePhase {
@@ -15,6 +15,7 @@ pub enum ConfirmResult {
     Warning,
     Open { iface: String },
     Already,
+    Ignored,
 }
 
 pub trait FrameSource {
@@ -81,25 +82,44 @@ impl CaptureControl {
         self.lines.iter().rev().take(count).cloned().collect()
     }
 
-    pub fn confirm(&mut self, hotspot_iface: &str) -> Result<ConfirmResult, String> {
+    pub fn is_warned(&self) -> bool {
+        self.phase == CapturePhase::Warned
+    }
+
+    pub fn warn(&mut self, hotspot_iface: &str) -> Result<ConfirmResult, String> {
         let iface = capture_interface(hotspot_iface, hotspot_iface)?;
-        match self.phase {
-            CapturePhase::Idle => {
-                self.iface = iface.to_string();
-                self.phase = CapturePhase::Warned;
-                Ok(ConfirmResult::Warning)
-            }
-            CapturePhase::Warned => {
-                if self.iface != iface {
-                    self.iface = iface.to_string();
-                    return Ok(ConfirmResult::Warning);
-                }
-                self.phase = CapturePhase::Armed;
-                Ok(ConfirmResult::Open {
-                    iface: self.iface.clone(),
-                })
-            }
-            CapturePhase::Armed | CapturePhase::Running => Ok(ConfirmResult::Already),
+        if matches!(self.phase, CapturePhase::Armed | CapturePhase::Running) {
+            return Ok(ConfirmResult::Already);
+        }
+        if self.phase == CapturePhase::Warned && self.iface != iface {
+            self.iface = iface.to_string();
+            return Ok(ConfirmResult::Warning);
+        }
+        self.iface = iface.to_string();
+        self.phase = CapturePhase::Warned;
+        Ok(ConfirmResult::Warning)
+    }
+
+    pub fn accept(&mut self, hotspot_iface: &str) -> Result<ConfirmResult, String> {
+        let iface = capture_interface(hotspot_iface, hotspot_iface)?;
+        if self.phase != CapturePhase::Warned {
+            return Ok(ConfirmResult::Ignored);
+        }
+        if self.iface != iface {
+            self.iface = iface.to_string();
+            self.phase = CapturePhase::Warned;
+            return Ok(ConfirmResult::Warning);
+        }
+        self.phase = CapturePhase::Armed;
+        Ok(ConfirmResult::Open {
+            iface: self.iface.clone(),
+        })
+    }
+
+    pub fn dismiss_warning(&mut self) {
+        if self.phase == CapturePhase::Warned {
+            self.phase = CapturePhase::Idle;
+            self.iface.clear();
         }
     }
 
@@ -308,10 +328,13 @@ mod tests {
     #[test]
     fn capture_does_not_start_before_the_second_confirmation() {
         let mut capture = CaptureControl::new();
-        let first = capture.confirm("wlan0").unwrap();
+        let first = capture.warn("wlan0").unwrap();
         assert_eq!(first, ConfirmResult::Warning);
         assert_eq!(capture.phase(), CapturePhase::Warned);
         assert!(!capture.is_running());
+        let repeated = capture.warn("wlan0").unwrap();
+        assert_eq!(repeated, ConfirmResult::Warning);
+        assert_eq!(capture.phase(), CapturePhase::Warned);
         let source = FakeSource {
             frames: vec![udp_frame()],
             reads: 0,
@@ -319,7 +342,7 @@ mod tests {
         capture.poll().unwrap();
         assert_eq!(source.reads, 0);
         let _ = source;
-        let second = capture.confirm("wlan0").unwrap();
+        let second = capture.accept("wlan0").unwrap();
         assert!(matches!(second, ConfirmResult::Open { iface } if iface == "wlan0"));
         assert!(!capture.is_running());
         capture
@@ -352,8 +375,8 @@ mod tests {
     #[test]
     fn stop_ends_capture() {
         let mut capture = CaptureControl::new();
-        capture.confirm("wlan0").unwrap();
-        capture.confirm("wlan0").unwrap();
+        capture.warn("wlan0").unwrap();
+        capture.accept("wlan0").unwrap();
         capture
             .attach(Box::new(FakeSource {
                 frames: Vec::new(),
@@ -368,7 +391,7 @@ mod tests {
     #[test]
     fn attach_before_the_second_confirmation_fails() {
         let mut capture = CaptureControl::new();
-        capture.confirm("wlan0").unwrap();
+        capture.warn("wlan0").unwrap();
         let error = capture
             .attach(Box::new(FakeSource {
                 frames: Vec::new(),
@@ -376,5 +399,21 @@ mod tests {
             }))
             .unwrap_err();
         assert!(error.contains("not confirmed"));
+    }
+
+    #[test]
+    fn the_warning_key_does_not_start_capture() {
+        let mut capture = CaptureControl::new();
+        assert_eq!(capture.accept("wlan0").unwrap(), ConfirmResult::Ignored);
+        capture.warn("wlan0").unwrap();
+        capture.warn("wlan0").unwrap();
+        assert_eq!(capture.phase(), CapturePhase::Warned);
+        assert!(capture.armed_interface().is_none());
+        let changed = capture.accept("wlan1").unwrap();
+        assert_eq!(changed, ConfirmResult::Warning);
+        assert_eq!(capture.phase(), CapturePhase::Warned);
+        assert!(capture.armed_interface().is_none());
+        let open = capture.accept("wlan1").unwrap();
+        assert!(matches!(open, ConfirmResult::Open { iface } if iface == "wlan1"));
     }
 }

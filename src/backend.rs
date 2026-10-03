@@ -1,5 +1,10 @@
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use crate::profile::{Band, Profile, SecurityMode};
 
@@ -79,6 +84,7 @@ pub struct Paths {
     pub state_dir: PathBuf,
     pub hostapd_config: PathBuf,
     pub iwd_ap_dir: PathBuf,
+    pub proc_root: PathBuf,
 }
 
 impl Paths {
@@ -87,6 +93,7 @@ impl Paths {
             state_dir: PathBuf::from("/run/hotmon"),
             hostapd_config: PathBuf::from("/etc/hostapd/hostapd.conf"),
             iwd_ap_dir: PathBuf::from("/var/lib/iwd/ap"),
+            proc_root: PathBuf::from("/proc"),
         }
     }
 
@@ -102,12 +109,39 @@ impl Paths {
         self.state_dir.join("hostapd.conf")
     }
 
+    pub fn dnsmasq_dir(&self) -> PathBuf {
+        match self.state_dir.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join("hotmon-dnsmasq"),
+            _ => PathBuf::from("/run/hotmon-dnsmasq"),
+        }
+    }
+
     pub fn dnsmasq_conf(&self) -> PathBuf {
-        self.state_dir.join("dnsmasq.conf")
+        self.dnsmasq_dir().join("dnsmasq.conf")
+    }
+
+    pub fn dnsmasq_lease(&self) -> PathBuf {
+        self.dnsmasq_dir().join("leases")
     }
 
     pub fn nft_path(&self) -> PathBuf {
         self.state_dir.join("hotmon.nft")
+    }
+
+    pub fn nm_secret(&self) -> PathBuf {
+        self.state_dir.join("hotmon.nmconnection")
+    }
+
+    pub fn hostapd_backup(&self) -> PathBuf {
+        self.state_dir.join("hostapd.conf.bak")
+    }
+
+    pub fn created_marker(&self) -> PathBuf {
+        self.state_dir.join("hostapd.created")
+    }
+
+    pub fn forwarding_record(&self) -> PathBuf {
+        self.state_dir.join("forwarding.restore")
     }
 }
 
@@ -140,6 +174,34 @@ impl PlannedCommand {
 pub struct PlanFile {
     pub path: PathBuf,
     pub contents: String,
+    pub mode: u32,
+    pub temporary: bool,
+    pub remove_on_failure: bool,
+    pub lock_parent: bool,
+}
+
+impl PlanFile {
+    fn plain(path: PathBuf, contents: String, mode: u32) -> Self {
+        Self {
+            path,
+            contents,
+            mode,
+            temporary: false,
+            remove_on_failure: mode == 0o600,
+            lock_parent: false,
+        }
+    }
+
+    fn temporary(mut self) -> Self {
+        self.temporary = true;
+        self.remove_on_failure = true;
+        self
+    }
+
+    fn lock_parent(mut self) -> Self {
+        self.lock_parent = true;
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,7 +215,15 @@ pub trait Runner {
     fn run(&mut self, command: &PlannedCommand) -> Result<String, String>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StartedProc {
+    pub pid: i32,
+    pub name: String,
+}
+
 pub trait ProcessControl {
+    fn describe(&mut self, pid: i32) -> Option<String>;
+    fn running(&mut self, pid: i32) -> bool;
     fn terminate(&mut self, pid: i32) -> Result<(), String>;
 }
 
@@ -182,20 +252,70 @@ impl Runner for SystemRunner {
 pub struct SystemSignals;
 
 impl ProcessControl for SystemSignals {
+    fn describe(&mut self, pid: i32) -> Option<String> {
+        if pid <= 0 {
+            return None;
+        }
+        let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok();
+        let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok();
+        daemon_name(comm.as_deref(), cmdline.as_deref())
+    }
+
+    fn running(&mut self, pid: i32) -> bool {
+        matches!(self.describe(pid).as_deref(), Some("hostapd" | "dnsmasq"))
+    }
+
     fn terminate(&mut self, pid: i32) -> Result<(), String> {
         if pid <= 0 {
             return Err(format!("The process id {pid} is not valid."));
         }
+        match self.describe(pid).as_deref() {
+            Some("hostapd" | "dnsmasq") => {}
+            _ => {
+                return Err(format!("The process {pid} is not hostapd or dnsmasq."));
+            }
+        }
         let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
-        if rc == 0 {
-            Ok(())
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::ESRCH) {
+                return Err(format!("The process {pid} did not stop. {err}"));
+            }
+        }
+        for _ in 0..20 {
+            if !self.running(pid) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if self.running(pid) {
+            Err(format!("The process {pid} is still running."))
         } else {
-            Err(format!(
-                "The process {pid} did not stop. {}",
-                std::io::Error::last_os_error()
-            ))
+            Ok(())
         }
     }
+}
+
+pub fn daemon_name(comm: Option<&str>, cmdline: Option<&[u8]>) -> Option<String> {
+    if let Some(comm) = comm.map(str::trim) {
+        if comm == "hostapd" || comm == "dnsmasq" {
+            return Some(comm.to_string());
+        }
+    }
+    if let Some(bytes) = cmdline {
+        let first = bytes.split(|byte| *byte == 0).next().unwrap_or(&[]);
+        let text = String::from_utf8_lossy(first);
+        let base = Path::new(text.as_ref())
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if base == "hostapd" || base == "dnsmasq" {
+            return Some(base);
+        }
+    }
+    comm.map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -234,13 +354,42 @@ impl Runner for ScriptedRunner {
 pub struct RecordedSignals {
     pub pids: Vec<i32>,
     pub fail: bool,
+    pub stay_alive: bool,
+    pub names: Vec<(i32, String)>,
 }
 
 #[cfg(test)]
 impl ProcessControl for RecordedSignals {
+    fn describe(&mut self, pid: i32) -> Option<String> {
+        self.names
+            .iter()
+            .find(|(id, _)| *id == pid)
+            .map(|(_, name)| name.clone())
+    }
+
+    fn running(&mut self, pid: i32) -> bool {
+        let Some(name) = self.describe(pid) else {
+            return false;
+        };
+        if name != "hostapd" && name != "dnsmasq" {
+            return false;
+        }
+        if self.pids.contains(&pid) && !self.fail && !self.stay_alive {
+            false
+        } else {
+            true
+        }
+    }
+
     fn terminate(&mut self, pid: i32) -> Result<(), String> {
         if pid <= 0 {
             return Err(format!("The process id {pid} is not valid."));
+        }
+        match self.describe(pid).as_deref() {
+            Some("hostapd" | "dnsmasq") => {}
+            _ => {
+                return Err(format!("The process {pid} is not hostapd or dnsmasq."));
+            }
         }
         self.pids.push(pid);
         if self.fail {
@@ -260,7 +409,7 @@ pub fn plan_apply(
         .check_settings()
         .map_err(|err| format!("The backend rejected the setting. {err}"))?;
     match kind {
-        BackendKind::NetworkManager => Ok(nm_plan(profile)),
+        BackendKind::NetworkManager => Ok(nm_plan(profile, paths)),
         BackendKind::Iwd => Ok(iwd_plan(profile, paths)),
         BackendKind::ExistingHostapd => Ok(hostapd_plan(profile, paths, true)),
         BackendKind::Direct => Ok(hostapd_plan(profile, paths, false)),
@@ -269,22 +418,46 @@ pub fn plan_apply(
 
 pub fn plan_stop(kind: BackendKind, profile: &Profile) -> Vec<PlannedCommand> {
     match kind {
-        BackendKind::NetworkManager => vec![PlannedCommand::new(
-            "nmcli",
-            ["connection", "down", "hotmon"],
-        )],
+        BackendKind::NetworkManager => vec![
+            PlannedCommand::new("nmcli", ["connection", "down", "hotmon"]),
+            PlannedCommand::new("nmcli", ["connection", "delete", "hotmon"]),
+        ],
         BackendKind::Iwd => vec![PlannedCommand::new(
             "iwctl",
             ["ap", profile.ap_interface.as_str(), "stop"],
         )],
-        BackendKind::ExistingHostapd => vec![
-            PlannedCommand::new("systemctl", ["stop", "hostapd"]),
-            PlannedCommand::new("nft", ["delete", "table", "inet", "hotmon"]).optional(),
-        ],
-        BackendKind::Direct => {
-            vec![PlannedCommand::new("nft", ["delete", "table", "inet", "hotmon"]).optional()]
+        BackendKind::ExistingHostapd => {
+            vec![PlannedCommand::new("systemctl", ["stop", "hostapd"])]
+        }
+        BackendKind::Direct => Vec::new(),
+    }
+}
+
+pub fn run_stop_commands(
+    commands: &[PlannedCommand],
+    runner: &mut dyn Runner,
+) -> Result<(), String> {
+    for command in commands {
+        if let Err(message) = runner.run(command) {
+            if command.optional || stop_target_missing(&message) {
+                continue;
+            }
+            return Err(format!(
+                "The backend rejected the stop request. {} failed: {message}",
+                command.program
+            ));
         }
     }
+    Ok(())
+}
+
+fn stop_target_missing(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    text.contains("unknown connection")
+        || text.contains("not found")
+        || text.contains("no such")
+        || text.contains("does not exist")
+        || text.contains("not active")
 }
 
 pub fn read_pid(path: &Path) -> Result<i32, String> {
@@ -307,39 +480,520 @@ pub fn read_pid_optional(path: &Path) -> Option<i32> {
     read_pid(path).ok()
 }
 
-pub fn execute_plan(plan: &ApplyPlan, runner: &mut dyn Runner) -> Result<(), String> {
-    for file in &plan.files {
-        if let Some(parent) = file.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
-        }
-        std::fs::write(&file.path, &file.contents)
-            .map_err(|err| format!("The program cannot write {}. {err}", file.path.display()))?;
+struct InstalledFiles {
+    temporary: Vec<PathBuf>,
+    failure_secrets: Vec<PathBuf>,
+    replaced_system: bool,
+    created_system: bool,
+    redirect: Option<PathBuf>,
+}
+
+pub fn execute_plan(
+    plan: &ApplyPlan,
+    runner: &mut dyn Runner,
+    signals: &mut dyn ProcessControl,
+    paths: &Paths,
+) -> Result<Vec<StartedProc>, String> {
+    let installed = install_files(plan, paths)?;
+    let mut started = Vec::new();
+    let mut nft_installed = false;
+    let mut forwarding_set = false;
+    let mut commands = plan.commands.clone();
+    if let Some(private) = installed.redirect.clone() {
+        redirect_hostapd(&mut commands, paths, &private);
     }
-    for command in &plan.commands {
-        if let Err(message) = runner.run(command) {
-            if command.optional {
-                continue;
+    for command in &commands {
+        if command.program == "hotmon-forward" {
+            if let Err(message) = enable_forwarding(paths, &command.args) {
+                let err =
+                    format!("The backend rejected the setting. hotmon-forward failed: {message}");
+                return fail_start(
+                    err,
+                    &installed,
+                    runner,
+                    signals,
+                    paths,
+                    &started,
+                    nft_installed,
+                    forwarding_set,
+                );
             }
+            forwarding_set = true;
+            continue;
+        }
+        match runner.run(command) {
+            Ok(_) => {
+                if command.program == "nft" && !command.args.iter().any(|arg| arg == "delete") {
+                    nft_installed = true;
+                }
+                note_started(command, &mut started);
+            }
+            Err(_message) if command.optional => continue,
+            Err(message) => {
+                let err = format!(
+                    "The backend rejected the setting. {} failed: {message}",
+                    command.program
+                );
+                return fail_start(
+                    err,
+                    &installed,
+                    runner,
+                    signals,
+                    paths,
+                    &started,
+                    nft_installed,
+                    forwarding_set,
+                );
+            }
+        }
+    }
+    for path in &installed.temporary {
+        let _ = fs::remove_file(path);
+    }
+    Ok(started)
+}
+
+fn fail_start(
+    err: String,
+    installed: &InstalledFiles,
+    runner: &mut dyn Runner,
+    signals: &mut dyn ProcessControl,
+    paths: &Paths,
+    started: &[StartedProc],
+    nft_installed: bool,
+    forwarding_set: bool,
+) -> Result<Vec<StartedProc>, String> {
+    match rollback(
+        installed,
+        runner,
+        signals,
+        paths,
+        started,
+        nft_installed,
+        forwarding_set,
+    ) {
+        Ok(()) => Err(err),
+        Err(extra) => Err(format!("{err} {extra}")),
+    }
+}
+
+fn rollback(
+    installed: &InstalledFiles,
+    runner: &mut dyn Runner,
+    signals: &mut dyn ProcessControl,
+    paths: &Paths,
+    started: &[StartedProc],
+    nft_installed: bool,
+    forwarding_set: bool,
+) -> Result<(), String> {
+    let mut cleanup_error = None;
+    if nft_installed {
+        if let Err(err) = run_nft_delete(runner) {
+            cleanup_error = Some(err);
+        }
+    }
+    if let Err(err) = stop_started(signals, started) {
+        cleanup_error = Some(err);
+    } else {
+        let _ = fs::remove_file(paths.hostapd_pid());
+        let _ = fs::remove_file(paths.dnsmasq_pid());
+    }
+    if forwarding_set {
+        if let Err(err) = restore_forwarding(paths) {
+            cleanup_error = Some(err);
+        }
+    }
+    if installed.replaced_system {
+        if let Err(err) = restore_hostapd_backup(paths) {
+            cleanup_error = Some(err);
+        }
+    }
+    if installed.created_system {
+        let _ = fs::remove_file(&paths.hostapd_config);
+        let _ = fs::remove_file(paths.created_marker());
+    }
+    for path in &installed.failure_secrets {
+        if installed.replaced_system && path == &paths.hostapd_config {
+            continue;
+        }
+        let _ = fs::remove_file(path);
+    }
+    for path in &installed.temporary {
+        let _ = fs::remove_file(path);
+    }
+    match cleanup_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+pub fn run_nft_delete(runner: &mut dyn Runner) -> Result<(), String> {
+    let command = PlannedCommand::new("nft", ["delete", "table", "inet", "hotmon"]);
+    match runner.run(&command) {
+        Ok(_) => Ok(()),
+        Err(message) if stop_target_missing(&message) => Ok(()),
+        Err(message) => Err(format!("The firewall did not stop. {message}")),
+    }
+}
+
+pub fn stop_started(
+    signals: &mut dyn ProcessControl,
+    started: &[StartedProc],
+) -> Result<(), String> {
+    for item in started {
+        if item.name != "hostapd" && item.name != "dnsmasq" {
+            continue;
+        }
+        let Some(name) = signals.describe(item.pid) else {
+            continue;
+        };
+        if name != item.name {
+            continue;
+        }
+        signals
+            .terminate(item.pid)
+            .map_err(|err| format!("The hotspot is not stopped. {err}"))?;
+        if signals.running(item.pid) {
             return Err(format!(
-                "The backend rejected the setting. {} failed: {message}",
-                command.program
+                "The hotspot is not stopped. {name} is still running."
             ));
         }
     }
     Ok(())
 }
 
-pub fn terminate_pids(signals: &mut dyn ProcessControl, pids: &[i32]) -> Result<(), String> {
-    for pid in pids {
-        signals
-            .terminate(*pid)
-            .map_err(|err| format!("The backend rejected the stop request. {err}"))?;
+pub fn restore_forwarding(paths: &Paths) -> Result<(), String> {
+    let record = paths.forwarding_record();
+    if !record.exists() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&record)
+        .map_err(|err| format!("The forwarding record cannot be read. {err}"))?;
+    for line in text.lines().filter(|line| !line.is_empty()) {
+        let Some((iface, value)) = line.split_once(' ') else {
+            return Err("The forwarding record is not valid.".to_string());
+        };
+        if !crate::iface::valid_name(iface) || (value != "0" && value != "1") {
+            return Err("The forwarding record is not valid.".to_string());
+        }
+        write_sysctl(&forwarding_path(paths, iface), &format!("{value}\n"))?;
+    }
+    fs::remove_file(&record)
+        .map_err(|err| format!("The forwarding record cannot be removed. {err}"))?;
+    Ok(())
+}
+
+pub fn restore_hostapd_backup(paths: &Paths) -> Result<(), String> {
+    let backup = paths.hostapd_backup();
+    if backup.exists() {
+        fs::copy(&backup, &paths.hostapd_config).map_err(|err| {
+            format!(
+                "The program cannot restore {}. {err}",
+                paths.hostapd_config.display()
+            )
+        })?;
+        fs::remove_file(&backup).map_err(|err| {
+            format!(
+                "The program cannot remove the backup {}. {err}",
+                backup.display()
+            )
+        })?;
+        return Ok(());
+    }
+    let marker = paths.created_marker();
+    if marker.exists() {
+        let _ = fs::remove_file(&paths.hostapd_config);
+        let _ = fs::remove_file(&marker);
     }
     Ok(())
 }
 
-fn nm_plan(profile: &Profile) -> ApplyPlan {
+pub fn retire_iwd_profile(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if fs::remove_file(path).is_ok() {
+        return Ok(());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
+        format!(
+            "The program cannot protect the iwd profile {}. {err}",
+            path.display()
+        )
+    })
+}
+
+fn install_files(plan: &ApplyPlan, paths: &Paths) -> Result<InstalledFiles, String> {
+    secure_state_dir(&paths.state_dir)?;
+    let mut installed = InstalledFiles {
+        temporary: Vec::new(),
+        failure_secrets: Vec::new(),
+        replaced_system: false,
+        created_system: false,
+        redirect: None,
+    };
+    for file in &plan.files {
+        if file.path == paths.hostapd_config && file.path != paths.direct_hostapd_conf() {
+            install_system_hostapd(file, paths, &mut installed)?;
+            continue;
+        }
+        if file.path.parent() == Some(paths.dnsmasq_dir().as_path()) {
+            ensure_dir_mode(&paths.dnsmasq_dir(), 0o755)?;
+        } else if file.lock_parent {
+            if let Some(parent) = file.path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    ensure_dir_mode(parent, 0o700)?;
+                }
+            }
+        } else if let Some(parent) = file.path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent).map_err(|err| {
+                    format!("The program cannot prepare {}. {err}", parent.display())
+                })?;
+            }
+        }
+        write_text(&file.path, &file.contents, file.mode)?;
+        if file.temporary {
+            installed.temporary.push(file.path.clone());
+        }
+        if file.remove_on_failure {
+            installed.failure_secrets.push(file.path.clone());
+        }
+    }
+    if plan
+        .files
+        .iter()
+        .any(|file| file.path == paths.dnsmasq_conf())
+    {
+        ensure_dir_mode(&paths.dnsmasq_dir(), 0o755)?;
+        if !paths.dnsmasq_lease().exists() {
+            write_text(&paths.dnsmasq_lease(), "", 0o666)?;
+        }
+    }
+    Ok(installed)
+}
+
+fn install_system_hostapd(
+    file: &PlanFile,
+    paths: &Paths,
+    installed: &mut InstalledFiles,
+) -> Result<(), String> {
+    if file.path.exists() {
+        match copy_private(&file.path, &paths.hostapd_backup()) {
+            Ok(()) => {
+                write_text(&file.path, &file.contents, 0o600)?;
+                installed.replaced_system = true;
+            }
+            Err(_) => {
+                let private = paths.direct_hostapd_conf();
+                write_text(&private, &file.contents, 0o600)?;
+                installed.redirect = Some(private.clone());
+                installed.failure_secrets.push(private);
+            }
+        }
+        return Ok(());
+    }
+    if let Some(parent) = file.path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
+        }
+    }
+    write_text(&file.path, &file.contents, 0o600)?;
+    write_text(&paths.created_marker(), "1\n", 0o600)?;
+    installed.created_system = true;
+    installed.failure_secrets.push(paths.created_marker());
+    Ok(())
+}
+
+fn redirect_hostapd(commands: &mut [PlannedCommand], paths: &Paths, private: &Path) {
+    let private = private.to_string_lossy().to_string();
+    for command in commands.iter_mut() {
+        if command.program == "systemctl" {
+            *command = PlannedCommand::new(
+                "hostapd",
+                [
+                    "-B".to_string(),
+                    "-P".to_string(),
+                    paths.hostapd_pid().to_string_lossy().to_string(),
+                    private.clone(),
+                ],
+            );
+        }
+    }
+}
+
+fn note_started(command: &PlannedCommand, started: &mut Vec<StartedProc>) {
+    let Some((name, pid_path)) = started_pid(command) else {
+        return;
+    };
+    let Some(pid) = read_pid_optional(&pid_path) else {
+        return;
+    };
+    started.push(StartedProc {
+        pid,
+        name: name.to_string(),
+    });
+}
+
+fn started_pid(command: &PlannedCommand) -> Option<(&'static str, PathBuf)> {
+    if command.program == "hostapd" {
+        let index = command.args.iter().position(|arg| arg == "-P")?;
+        let path = command.args.get(index + 1)?;
+        return Some(("hostapd", PathBuf::from(path)));
+    }
+    if command.program == "dnsmasq" {
+        let path = command
+            .args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("--pid-file="))?;
+        return Some(("dnsmasq", PathBuf::from(path)));
+    }
+    None
+}
+
+pub fn secure_state_dir(path: &Path) -> Result<(), String> {
+    ensure_dir_mode(path, 0o700)?;
+    match chown_root(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.raw_os_error() == Some(libc::EPERM) => Ok(()),
+        Err(err) => Err(format!(
+            "The program cannot protect {}. {err}",
+            path.display()
+        )),
+    }
+}
+
+fn chown_root(path: &Path) -> std::io::Result<()> {
+    let text = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+    let rc = unsafe { libc::chown(text.as_ptr(), 0, 0) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn ensure_dir_mode(path: &Path, mode: u32) -> Result<(), String> {
+    fs::create_dir_all(path)
+        .map_err(|err| format!("The program cannot prepare {}. {err}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .map_err(|err| format!("The program cannot protect {}. {err}", path.display()))
+}
+
+fn copy_private(from: &Path, to: &Path) -> Result<(), String> {
+    if let Some(parent) = to.parent() {
+        ensure_dir_mode(parent, 0o700)?;
+    }
+    let data = fs::read(from)
+        .map_err(|err| format!("The program cannot read {}. {err}", from.display()))?;
+    write_bytes(to, &data, 0o600)
+}
+
+fn write_text(path: &Path, contents: &str, mode: u32) -> Result<(), String> {
+    write_bytes(path, contents.as_bytes(), mode)
+}
+
+fn write_bytes(path: &Path, contents: &[u8], mode: u32) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
+        }
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .open(path)
+        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+    file.write_all(contents)
+        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .map_err(|err| format!("The program cannot protect {}. {err}", path.display()))
+}
+
+fn enable_forwarding(paths: &Paths, ifaces: &[String]) -> Result<(), String> {
+    let mut lines = Vec::new();
+    for iface in ifaces {
+        if !crate::iface::valid_name(iface) || iface == "all" || iface == "default" {
+            return Err(format!("Forwarding is not set for the interface {iface}."));
+        }
+        let path = forwarding_path(paths, iface);
+        let previous = if path.exists() {
+            fs::read_to_string(&path)
+                .map_err(|err| format!("The forwarding control for {iface} cannot be read. {err}"))?
+                .trim()
+                .to_string()
+        } else if paths.proc_root == Path::new("/proc") {
+            return Err(format!(
+                "The forwarding control for {iface} is not available."
+            ));
+        } else {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|err| {
+                    format!("The program cannot prepare {}. {err}", parent.display())
+                })?;
+            }
+            "0".to_string()
+        };
+        if previous != "0" && previous != "1" {
+            return Err(format!("The forwarding value for {iface} is not valid."));
+        }
+        write_sysctl(&path, "1\n")?;
+        lines.push(format!("{iface} {previous}"));
+    }
+    write_text(
+        &paths.forwarding_record(),
+        &format!("{}\n", lines.join("\n")),
+        0o600,
+    )?;
+    Ok(())
+}
+
+fn forwarding_path(paths: &Paths, iface: &str) -> PathBuf {
+    paths
+        .proc_root
+        .join("sys/net/ipv4/conf")
+        .join(iface)
+        .join("forwarding")
+}
+
+fn write_sysctl(path: &Path, value: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.exists() && !path.starts_with("/proc") {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
+        }
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(!path.starts_with("/proc"))
+        .open(path)
+        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+    file.write_all(value.as_bytes())
+        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))
+}
+
+fn nm_plan(profile: &Profile, paths: &Paths) -> ApplyPlan {
+    let secret = paths.nm_secret();
+    ApplyPlan {
+        files: vec![PlanFile::plain(secret.clone(), nm_keyfile(profile), 0o600).temporary()],
+        commands: vec![
+            PlannedCommand::new("nmcli", ["connection", "delete", "hotmon"]).optional(),
+            PlannedCommand::new(
+                "nmcli",
+                ["connection", "load", secret.to_string_lossy().as_ref()],
+            ),
+            PlannedCommand::new("nmcli", ["connection", "up", "hotmon"]),
+        ],
+        tools: vec!["NetworkManager"],
+    }
+}
+
+fn nm_keyfile(profile: &Profile) -> String {
     let band = match profile.band {
         Band::Band24 => "bg",
         Band::Band5 => "a",
@@ -349,80 +1003,42 @@ fn nm_plan(profile: &Profile) -> ApplyPlan {
     } else {
         "manual"
     };
-    let gateway = profile
+    let address = profile
         .network()
-        .and_then(|network| network.gateway())
-        .map(|addr| {
-            format!(
-                "{addr}/{}",
-                profile
-                    .network()
-                    .map(|network| network.prefix())
-                    .unwrap_or(24)
-            )
+        .and_then(|network| {
+            let prefix = network.prefix();
+            network.gateway().map(|addr| format!("{addr}/{prefix}"))
         })
         .unwrap_or_else(|_| profile.address_cidr.clone());
-    let mut add = vec![
-        "connection".to_string(),
-        "add".to_string(),
-        "type".to_string(),
-        "wifi".to_string(),
-        "ifname".to_string(),
-        profile.ap_interface.clone(),
-        "con-name".to_string(),
-        "hotmon".to_string(),
-        "autoconnect".to_string(),
-        "no".to_string(),
-        "ssid".to_string(),
-        profile.ssid.clone(),
-        "802-11-wireless.mode".to_string(),
-        "ap".to_string(),
-        "802-11-wireless.band".to_string(),
-        band.to_string(),
-        "802-11-wireless.channel".to_string(),
-        profile.channel.to_string(),
-        "ipv4.method".to_string(),
-        method.to_string(),
-        "ipv4.addresses".to_string(),
-        gateway,
-    ];
+    let mut text = format!(
+        "[connection]\nid=hotmon\ntype=wifi\ninterface-name={}\nautoconnect=false\n\n[wifi]\nmode=ap\nssid={}\nband={band}\nchannel={}\n\n",
+        profile.ap_interface, profile.ssid, profile.channel
+    );
     match profile.security {
         SecurityMode::Open => {}
         SecurityMode::Wpa2 => {
-            add.extend([
-                "wifi-sec.key-mgmt".to_string(),
-                "wpa-psk".to_string(),
-                "wifi-sec.psk".to_string(),
-                profile.passphrase.clone(),
-            ]);
+            text.push_str(&format!(
+                "[wifi-security]\nkey-mgmt=wpa-psk\npsk={}\n\n",
+                profile.passphrase
+            ));
         }
         SecurityMode::Wpa3 => {
-            add.extend([
-                "wifi-sec.key-mgmt".to_string(),
-                "sae".to_string(),
-                "wifi-sec.psk".to_string(),
-                profile.passphrase.clone(),
-            ]);
+            text.push_str(&format!(
+                "[wifi-security]\nkey-mgmt=sae\npsk={}\n\n",
+                profile.passphrase
+            ));
         }
     }
-    ApplyPlan {
-        files: Vec::new(),
-        commands: vec![
-            PlannedCommand::new("nmcli", ["connection", "delete", "hotmon"]).optional(),
-            PlannedCommand::new("nmcli", add),
-            PlannedCommand::new("nmcli", ["connection", "up", "hotmon"]),
-        ],
-        tools: vec!["NetworkManager"],
-    }
+    text.push_str(&format!(
+        "[ipv4]\nmethod={method}\naddress1={address}\n\n[ipv6]\nmethod=disabled\n"
+    ));
+    text
 }
 
 fn iwd_plan(profile: &Profile, paths: &Paths) -> ApplyPlan {
     let path = paths.iwd_ap_dir.join(format!("{}.ap", profile.ssid));
     ApplyPlan {
-        files: vec![PlanFile {
-            path,
-            contents: iwd_profile(profile),
-        }],
+        files: vec![PlanFile::plain(path, iwd_profile(profile), 0o600).lock_parent()],
         commands: vec![
             PlannedCommand::new(
                 "iwctl",
@@ -455,18 +1071,9 @@ fn hostapd_plan(profile: &Profile, paths: &Paths, existing: bool) -> ApplyPlan {
         paths.direct_hostapd_conf()
     };
     let files = vec![
-        PlanFile {
-            path: hostapd_conf.clone(),
-            contents: hostapd_conf_text(profile),
-        },
-        PlanFile {
-            path: paths.dnsmasq_conf(),
-            contents: dnsmasq_conf_text(profile),
-        },
-        PlanFile {
-            path: paths.nft_path(),
-            contents: nft_text(profile),
-        },
+        PlanFile::plain(hostapd_conf.clone(), hostapd_conf_text(profile), 0o600),
+        PlanFile::plain(paths.dnsmasq_conf(), dnsmasq_conf_text(profile), 0o644),
+        PlanFile::plain(paths.nft_path(), nft_text(profile), 0o644),
     ];
     let gateway = profile
         .network()
@@ -492,12 +1099,23 @@ fn hostapd_plan(profile: &Profile, paths: &Paths, existing: bool) -> ApplyPlan {
             ["-f", paths.nft_path().to_str().unwrap_or("hotmon.nft")],
         ),
     ];
+    if profile.upstream_interface != "none" {
+        commands.push(PlannedCommand::new(
+            "hotmon-forward",
+            [
+                profile.ap_interface.as_str(),
+                profile.upstream_interface.as_str(),
+            ],
+        ));
+    }
     if profile.dhcp_enabled {
         commands.push(PlannedCommand::new(
             "dnsmasq",
             [
                 format!("--conf-file={}", paths.dnsmasq_conf().display()),
                 format!("--pid-file={}", paths.dnsmasq_pid().display()),
+                "--user=nobody".to_string(),
+                format!("--dhcp-leasefile={}", paths.dnsmasq_lease().display()),
             ],
         ));
     }
@@ -578,19 +1196,27 @@ pub fn dnsmasq_conf_text(profile: &Profile) -> String {
 }
 
 pub fn nft_text(profile: &Profile) -> String {
+    let ap = &profile.ap_interface;
+    let dns = profile
+        .network()
+        .and_then(|network| network.gateway())
+        .map(|addr| {
+            format!(
+                "    iifname \"{ap}\" ip daddr {addr} udp dport 53 accept\n    iifname \"{ap}\" ip daddr {addr} tcp dport 53 accept\n"
+            )
+        })
+        .unwrap_or_default();
+    let input = format!(
+        "  chain input {{\n    type filter hook input priority 0; policy accept;\n    iifname \"{ap}\" udp dport 67 accept\n{dns}    iifname \"{ap}\" ct state new drop\n  }}\n"
+    );
     if profile.upstream_interface == "none" {
         return format!(
-            "add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{}\" drop\n  }}\n}}\n",
-            profile.ap_interface
+            "add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n{input}  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{ap}\" drop\n  }}\n}}\n"
         );
     }
+    let up = &profile.upstream_interface;
     format!(
-        "add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n  chain postrouting {{\n    type nat hook postrouting priority 100; policy accept;\n    oifname \"{}\" masquerade\n  }}\n  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{}\" oifname \"{}\" accept\n    iifname \"{}\" oifname \"{}\" ct state established,related accept\n  }}\n}}\n",
-        profile.upstream_interface,
-        profile.ap_interface,
-        profile.upstream_interface,
-        profile.upstream_interface,
-        profile.ap_interface
+        "add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n{input}  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{ap}\" oifname \"{up}\" accept\n    iifname \"{up}\" oifname \"{ap}\" ct state established,related accept\n    iifname \"{ap}\" drop\n  }}\n  chain postrouting {{\n    type nat hook postrouting priority 100; policy accept;\n    iifname \"{ap}\" oifname \"{up}\" masquerade\n  }}\n}}\n"
     )
 }
 
@@ -625,6 +1251,8 @@ pub fn iwd_profile(profile: &Profile) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
     use crate::profile::{sample_profile, scratch_dir};
 
@@ -661,6 +1289,7 @@ mod tests {
             state_dir: dir.join("run"),
             hostapd_config: dir.join("hostapd.conf"),
             iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
         };
         let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
         assert_eq!(plan.tools, direct_tools());
@@ -682,11 +1311,43 @@ mod tests {
             .unwrap();
         assert!(hostapd.contents.contains("ssid=Hotmon"));
         assert!(hostapd.contents.contains("wpa_passphrase=correct-horse"));
+        let masq = plan
+            .files
+            .iter()
+            .find_map(|file| {
+                file.contents
+                    .lines()
+                    .find(|line| line.contains("masquerade"))
+                    .map(str::to_string)
+            })
+            .unwrap();
+        assert!(masq.contains("wlan0"), "{masq}");
+        assert!(masq.contains("eth0"), "{masq}");
+        let names: Vec<&str> = plan
+            .commands
+            .iter()
+            .map(|command| command.program.as_str())
+            .collect();
+        let nft = names.iter().position(|name| *name == "nft").unwrap();
+        let forward = names
+            .iter()
+            .position(|name| *name == "hotmon-forward")
+            .unwrap();
+        let dnsmasq = names.iter().position(|name| *name == "dnsmasq").unwrap();
+        let hostapd_at = names.iter().position(|name| *name == "hostapd").unwrap();
+        assert!(nft < forward && forward < dnsmasq && dnsmasq < hostapd_at);
+        let dnsmasq_command = plan
+            .commands
+            .iter()
+            .find(|command| command.program == "dnsmasq")
+            .unwrap();
         assert!(
-            plan.files
+            dnsmasq_command
+                .args
                 .iter()
-                .any(|file| file.contents.contains("masquerade") && file.contents.contains("eth0"))
+                .any(|arg| arg == "--user=nobody")
         );
+        assert!(dnsmasq_command.args.iter().all(|arg| arg != "--user=root"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -715,6 +1376,7 @@ mod tests {
             state_dir: dir.clone(),
             hostapd_config: dir.join("h.conf"),
             iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
         };
         let plan = plan_apply(BackendKind::NetworkManager, &sample_profile(), &paths).unwrap();
         assert!(
@@ -722,13 +1384,15 @@ mod tests {
                 .iter()
                 .all(|command| command.program == "nmcli")
         );
-        let add = plan
-            .commands
-            .iter()
-            .find(|command| command.args.contains(&"add".to_string()))
-            .unwrap();
-        assert!(add.args.iter().any(|arg| arg == "Hotmon"));
-        assert!(add.args.iter().any(|arg| arg == "wpa-psk"));
+        assert!(plan.files[0].contents.contains("ssid=Hotmon"));
+        assert!(plan.files[0].contents.contains("key-mgmt=wpa-psk"));
+        assert!(plan.files[0].contents.contains("psk=correct-horse"));
+        assert!(plan.commands.iter().all(|command| {
+            command
+                .args
+                .iter()
+                .all(|arg| !arg.contains("correct-horse"))
+        }));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -739,6 +1403,7 @@ mod tests {
             state_dir: dir.join("run"),
             hostapd_config: dir.join("h.conf"),
             iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
         };
         let plan = plan_apply(BackendKind::Iwd, &sample_profile(), &paths).unwrap();
         assert!(
@@ -763,6 +1428,7 @@ mod tests {
             state_dir: dir.clone(),
             hostapd_config: dir.join("h.conf"),
             iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
         };
         let mut profile = sample_profile();
         profile.channel = 2;
@@ -777,10 +1443,12 @@ mod tests {
             ],
             ..ScriptedRunner::default()
         };
-        let error = execute_plan(&plan, &mut runner).unwrap_err();
+        let error =
+            execute_plan(&plan, &mut runner, &mut RecordedSignals::default(), &paths).unwrap_err();
         assert!(error.contains("The backend rejected the setting."));
         assert!(error.contains("channel is not supported"));
         assert_eq!(runner.calls.len(), 2);
+        assert!(!paths.nm_secret().exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -791,6 +1459,7 @@ mod tests {
             state_dir: dir.join("run"),
             hostapd_config: dir.join("etc").join("hostapd.conf"),
             iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
         };
         let plan = plan_apply(BackendKind::ExistingHostapd, &sample_profile(), &paths).unwrap();
         assert!(plan.commands.iter().any(|command| {
@@ -802,5 +1471,366 @@ mod tests {
                 .any(|file| file.path == paths.hostapd_config)
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn mode_bits(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    fn assert_no_secret_args(plan: &ApplyPlan, secret: &str) {
+        for command in &plan.commands {
+            assert!(!command.program.contains(secret), "{}", command.program);
+            for arg in &command.args {
+                assert!(!arg.contains(secret), "{} {arg}", command.program);
+            }
+        }
+    }
+
+    #[test]
+    fn planned_arguments_do_not_contain_the_passphrase() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        for kind in [
+            BackendKind::NetworkManager,
+            BackendKind::Iwd,
+            BackendKind::ExistingHostapd,
+            BackendKind::Direct,
+        ] {
+            let plan = plan_apply(kind, &sample_profile(), &paths).unwrap();
+            assert_no_secret_args(&plan, "correct-horse");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn secret_files_use_private_modes_and_dnsmasq_does_not() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        assert_eq!(mode_bits(&paths.state_dir), 0o700);
+        let hostapd = paths.direct_hostapd_conf();
+        assert_eq!(mode_bits(&hostapd), 0o600);
+        let dnsmasq = paths.dnsmasq_conf();
+        assert_eq!(mode_bits(&dnsmasq) & 0o004, 0o004);
+        assert_ne!(dnsmasq, hostapd);
+        let dns_text = std::fs::read_to_string(&dnsmasq).unwrap();
+        assert!(!dns_text.contains("correct-horse"));
+        assert!(!dns_text.contains("wpa_passphrase"));
+        let iwd = plan_apply(BackendKind::Iwd, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &iwd,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        assert_eq!(mode_bits(&iwd.files[0].path), 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn firewall_limits_hotspot_forward_and_input() {
+        let text = nft_text(&sample_profile());
+        let masq = text
+            .lines()
+            .find(|line| line.contains("masquerade"))
+            .unwrap();
+        assert!(masq.contains("wlan0") && masq.contains("eth0"), "{masq}");
+        assert!(text.contains("iifname \"wlan0\" oifname \"eth0\" accept"));
+        assert!(
+            text.contains("iifname \"eth0\" oifname \"wlan0\" ct state established,related accept")
+        );
+        assert!(text.contains("iifname \"wlan0\" drop"));
+        assert!(text.contains("udp dport 67 accept"));
+        assert!(text.contains("ip daddr 192.168.42.1 udp dport 53 accept"));
+        assert!(text.contains("ip daddr 192.168.42.1 tcp dport 53 accept"));
+        assert!(text.contains("iifname \"wlan0\" ct state new drop"));
+        assert!(!text.contains("policy drop"));
+        for line in text.lines().filter(|line| line.contains("drop")) {
+            assert!(line.contains("wlan0"), "{line}");
+        }
+        let mut isolated = sample_profile();
+        isolated.upstream_interface = "none".to_string();
+        let isolated_text = nft_text(&isolated);
+        assert!(!isolated_text.contains("masquerade"));
+        assert!(isolated_text.contains("iifname \"wlan0\" drop"));
+        assert!(!isolated_text.contains("policy drop"));
+    }
+
+    #[test]
+    fn forwarding_changes_only_the_hotspot_and_upstream() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let all = paths.proc_root.join("sys/net/ipv4/conf/all/forwarding");
+        std::fs::create_dir_all(all.parent().unwrap()).unwrap();
+        std::fs::write(&all, "0\n").unwrap();
+        enable_forwarding(&paths, &["wlan0".to_string(), "eth0".to_string()]).unwrap();
+        let ap = std::fs::read_to_string(forwarding_path(&paths, "wlan0")).unwrap();
+        let up = std::fs::read_to_string(forwarding_path(&paths, "eth0")).unwrap();
+        assert_eq!(ap.trim(), "1");
+        assert_eq!(up.trim(), "1");
+        assert_eq!(std::fs::read_to_string(&all).unwrap().trim(), "0");
+        restore_forwarding(&paths).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(forwarding_path(&paths, "wlan0"))
+                .unwrap()
+                .trim(),
+            "0"
+        );
+        assert!(!paths.forwarding_record().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_start_removes_the_firewall_and_the_daemon() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("kept.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        std::fs::write(&paths.hostapd_config, "leave-this\n").unwrap();
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        let pid_path = paths.dnsmasq_pid();
+        let mut runner = PidOnSuccess {
+            inner: ScriptedRunner::with_results(vec![
+                Ok(String::new()),
+                Ok(String::new()),
+                Ok(String::new()),
+                Ok(String::new()),
+                Err("hostapd failed".to_string()),
+            ]),
+            pid_path,
+            pid: 77,
+        };
+        let mut signals = RecordedSignals {
+            names: vec![(77, "dnsmasq".to_string())],
+            ..RecordedSignals::default()
+        };
+        let error = execute_plan(&plan, &mut runner, &mut signals, &paths).unwrap_err();
+        assert!(error.contains("The backend rejected the setting."));
+        assert!(runner.inner.calls.iter().any(|command| {
+            command.program == "nft" && command.args.iter().any(|arg| arg == "delete")
+        }));
+        assert_eq!(signals.pids, vec![77]);
+        assert!(!signals.running(77));
+        assert!(!paths.direct_hostapd_conf().exists());
+        assert_eq!(
+            std::fs::read_to_string(&paths.hostapd_config).unwrap(),
+            "leave-this\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn stop_does_not_signal_a_foreign_process() {
+        let mut foreign = RecordedSignals {
+            names: vec![(42, "bash".to_string())],
+            ..RecordedSignals::default()
+        };
+        stop_started(
+            &mut foreign,
+            &[StartedProc {
+                pid: 42,
+                name: "hostapd".to_string(),
+            }],
+        )
+        .unwrap();
+        assert!(foreign.pids.is_empty());
+        let mut other = RecordedSignals {
+            names: vec![(99, "hostapd".to_string())],
+            ..RecordedSignals::default()
+        };
+        stop_started(&mut other, &[]).unwrap();
+        assert!(other.pids.is_empty());
+        let mut alive = RecordedSignals {
+            names: vec![(7, "dnsmasq".to_string())],
+            stay_alive: true,
+            ..RecordedSignals::default()
+        };
+        let error = stop_started(
+            &mut alive,
+            &[StartedProc {
+                pid: 7,
+                name: "dnsmasq".to_string(),
+            }],
+        )
+        .unwrap_err();
+        assert!(error.contains("not stopped"));
+        assert!(error.contains("still running"));
+    }
+
+    #[test]
+    fn hostapd_system_file_is_restored_from_the_backup() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("etc").join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        std::fs::create_dir_all(paths.hostapd_config.parent().unwrap()).unwrap();
+        std::fs::write(&paths.hostapd_config, "original-config\n").unwrap();
+        let plan = plan_apply(BackendKind::ExistingHostapd, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        let changed = std::fs::read_to_string(&paths.hostapd_config).unwrap();
+        assert!(changed.contains("ssid=Hotmon"));
+        assert_eq!(mode_bits(&paths.hostapd_backup()), 0o600);
+        restore_hostapd_backup(&paths).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&paths.hostapd_config).unwrap(),
+            "original-config\n"
+        );
+        assert!(!paths.hostapd_backup().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_missing_backup_does_not_change_the_system_file() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("etc").join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        std::fs::create_dir_all(paths.hostapd_config.parent().unwrap()).unwrap();
+        std::fs::write(&paths.hostapd_config, "original-config\n").unwrap();
+        std::fs::create_dir_all(&paths.state_dir).unwrap();
+        std::fs::create_dir_all(paths.hostapd_backup()).unwrap();
+        let plan = plan_apply(BackendKind::ExistingHostapd, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&paths.hostapd_config).unwrap(),
+            "original-config\n"
+        );
+        assert!(paths.direct_hostapd_conf().exists());
+        assert_eq!(mode_bits(&paths.direct_hostapd_conf()), 0o600);
+        let hostapd = plan
+            .commands
+            .iter()
+            .find(|command| command.program == "systemctl")
+            .is_some();
+        assert!(hostapd);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn daemon_name_accepts_only_hostapd_and_dnsmasq() {
+        assert_eq!(
+            daemon_name(Some("hostapd\n"), None).as_deref(),
+            Some("hostapd")
+        );
+        assert_eq!(daemon_name(Some("nginx\n"), None).as_deref(), Some("nginx"));
+        assert_eq!(
+            daemon_name(None, Some(b"/usr/sbin/dnsmasq\0--conf-file=/run/x\0")).as_deref(),
+            Some("dnsmasq")
+        );
+        assert_eq!(daemon_name(None, None), None);
+    }
+
+    #[test]
+    fn nm_secret_file_is_removed_after_the_call() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("h.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let plan = plan_apply(BackendKind::NetworkManager, &sample_profile(), &paths).unwrap();
+        let mut runner = ModeCheck {
+            saw_private_secret: false,
+        };
+        execute_plan(&plan, &mut runner, &mut RecordedSignals::default(), &paths).unwrap();
+        assert!(runner.saw_private_secret);
+        assert!(!paths.nm_secret().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+struct PidOnSuccess {
+    inner: ScriptedRunner,
+    pid_path: std::path::PathBuf,
+    pid: i32,
+}
+
+#[cfg(test)]
+impl Runner for PidOnSuccess {
+    fn run(&mut self, command: &PlannedCommand) -> Result<String, String> {
+        let result = self.inner.run(command);
+        if command.program == "dnsmasq" && result.is_ok() {
+            if let Some(parent) = self.pid_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&self.pid_path, format!("{}\n", self.pid));
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+struct ModeCheck {
+    saw_private_secret: bool,
+}
+
+#[cfg(test)]
+impl Runner for ModeCheck {
+    fn run(&mut self, command: &PlannedCommand) -> Result<String, String> {
+        if command.args.iter().any(|arg| arg == "load") {
+            let path = command.args.last().unwrap();
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+            let text = std::fs::read_to_string(path).unwrap();
+            assert!(text.contains("psk=correct-horse"));
+            assert!(
+                command
+                    .args
+                    .iter()
+                    .all(|arg| !arg.contains("correct-horse"))
+            );
+            self.saw_private_secret = true;
+        }
+        Ok(String::new())
     }
 }

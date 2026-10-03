@@ -27,7 +27,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 match app.on_key(key.code, key.modifiers) {
                     Step::Quit => break,
                     Step::Apply => {
-                        if let Err(err) = app.apply_hotspot(&mut runner, &paths) {
+                        if let Err(err) = app.apply_hotspot(&mut runner, &mut signals, &paths) {
                             app.notice = err;
                         }
                     }
@@ -225,6 +225,11 @@ fn draw_monitor(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
 fn footer(app: &App) -> Paragraph<'static> {
     let text = match app.view {
+        View::Wizard
+            if app.wizard.page == crate::wizard::Page::Review && app.needs_open_warning() =>
+        {
+            "y: apply open hotspot  Enter does not apply  Left: previous page  Esc: cancel  Ctrl+q: quit"
+        }
         View::Wizard if app.wizard.page == crate::wizard::Page::Review => {
             "Enter: apply  Left: previous page  Esc: cancel  Ctrl+q: quit"
         }
@@ -243,8 +248,8 @@ fn footer(app: &App) -> Paragraph<'static> {
 mod tests {
     use std::path::PathBuf;
 
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     use super::*;
     use crate::backend::BackendKind;
@@ -252,9 +257,7 @@ mod tests {
     fn buffer_text(app: &App) -> String {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("test terminal");
-        terminal
-            .draw(|frame| draw(frame, app))
-            .expect("draw");
+        terminal.draw(|frame| draw(frame, app)).expect("draw");
         terminal
             .backend()
             .buffer()
@@ -278,5 +281,39 @@ mod tests {
             text.contains("The interface nope is not available."),
             "header clipped the rejection message: {text}"
         );
+    }
+
+    #[test]
+    fn review_and_status_do_not_show_the_passphrase() {
+        let mut app = App::from_parts(
+            BackendKind::NetworkManager,
+            crate::iface::sample_interfaces(),
+            PathBuf::from("/tmp/hotmon-secret-screen.json"),
+            Some(crate::profile::sample_profile()),
+        );
+        let review = buffer_text(&app);
+        assert!(review.contains("Passphrase: set"));
+        assert!(!review.contains("correct-horse"), "{review}");
+        app.wizard.page = crate::wizard::Page::Passphrase;
+        let masked = buffer_text(&app);
+        assert!(!masked.contains("correct-horse"), "{masked}");
+        assert!(masked.contains("*************"));
+        app.wizard.security = "open".to_string();
+        app.wizard.passphrase.clear();
+        app.wizard.upstream_interface = "eth0".to_string();
+        app.wizard.page = crate::wizard::Page::Review;
+        let warning = buffer_text(&app);
+        assert!(warning.contains("radio range"), "{warning}");
+        assert!(!warning.contains("correct-horse"));
+        app.view = View::Status;
+        app.active = Some(crate::profile::sample_profile());
+        app.status = HotspotStatus::Running {
+            ssid: "Hotmon".to_string(),
+            interface: "wlan0".to_string(),
+            backend: "NetworkManager".to_string(),
+        };
+        let status = buffer_text(&app);
+        assert!(!status.contains("correct-horse"), "{status}");
+        assert!(status.contains("Hotmon"));
     }
 }

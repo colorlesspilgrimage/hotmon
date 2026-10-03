@@ -126,27 +126,44 @@ impl Wizard {
         (self.page.index() + 1, ORDER.len())
     }
 
-    pub fn hint(&self) -> &'static str {
+    pub fn open_upstream_risk(&self) -> bool {
+        self.security == "open"
+            && !self.upstream_interface.is_empty()
+            && self.upstream_interface != "none"
+    }
+
+    pub fn hint(&self) -> String {
         match self.page {
-            Page::Interface => "Enter the access-point interface.",
-            Page::Ssid => "Enter the SSID. Use 1 to 32 characters.",
-            Page::Security => "Enter open, wpa2, or wpa3.",
+            Page::Interface => "Enter the access-point interface.".to_string(),
+            Page::Ssid => "Enter the SSID. Use 1 to 32 characters.".to_string(),
+            Page::Security => "Enter open, wpa2, or wpa3.".to_string(),
             Page::Passphrase => {
                 "Enter the passphrase. Use 8 to 63 characters. Leave this empty for open."
+                    .to_string()
             }
-            Page::BandChannel => "Enter the band (2.4 or 5) and the channel.",
-            Page::AddressDhcp => "Enter the address range, DHCP on or off, and the DHCP range.",
-            Page::Upstream => "Enter the upstream interface, or none.",
-            Page::Review => "Review the settings. Enter applies the profile.",
+            Page::BandChannel => "Enter the band (2.4 or 5) and the channel.".to_string(),
+            Page::AddressDhcp => {
+                "Enter the address range, DHCP on or off, and the DHCP range.".to_string()
+            }
+            Page::Upstream => "Enter the upstream interface, or none.".to_string(),
+            Page::Review if self.open_upstream_risk() => format!(
+                "{} Press y to apply. Enter does not apply this warning.",
+                crate::profile::OPEN_UPSTREAM_WARNING
+            ),
+            Page::Review => "Review the settings. Enter applies the profile.".to_string(),
         }
     }
 
     pub fn field_lines(&self) -> Vec<FieldLine> {
+        let masked;
         let pairs: Vec<(&str, &str)> = match self.page {
             Page::Interface => vec![("Access-point interface", &self.ap_interface)],
             Page::Ssid => vec![("SSID", &self.ssid)],
             Page::Security => vec![("Security mode", &self.security)],
-            Page::Passphrase => vec![("Passphrase", &self.passphrase)],
+            Page::Passphrase => {
+                masked = "*".repeat(self.passphrase.chars().count());
+                vec![("Passphrase", masked.as_str())]
+            }
             Page::BandChannel => vec![("Band", &self.band), ("Channel", &self.channel)],
             Page::AddressDhcp => vec![
                 ("Address range", &self.address_cidr),
@@ -504,5 +521,33 @@ mod tests {
         let profile = wizard.confirmed_profile(&sample_interfaces()).unwrap();
         assert_eq!(profile, sample_profile());
         assert_eq!(wizard.page, Page::Review);
+    }
+
+    #[test]
+    fn passphrase_page_masks_the_value() {
+        let mut wizard = Wizard::from_profile(&sample_profile());
+        wizard.page = Page::Passphrase;
+        let lines = wizard.field_lines();
+        assert_eq!(lines[0].value, "*".repeat("correct-horse".chars().count()));
+        assert!(!lines[0].value.contains("correct-horse"));
+        assert!(!lines[0].value.contains('c'));
+    }
+
+    #[test]
+    fn passphrase_page_rejects_shell_characters_and_outer_spaces() {
+        let mut wizard = Wizard::new();
+        fill_valid(&mut wizard);
+        wizard.page = Page::Passphrase;
+        for bad in [
+            "correct#horse",
+            "correct\"horse",
+            "correct\\horse",
+            " correct-horse",
+            "correct-horse ",
+        ] {
+            wizard.passphrase = bad.to_string();
+            assert!(wizard.next(&sample_interfaces()).is_err(), "{bad}");
+            assert_eq!(wizard.page, Page::Passphrase);
+        }
     }
 }

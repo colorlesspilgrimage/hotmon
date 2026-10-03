@@ -1,5 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::net::Ipv4Addr;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -160,6 +162,8 @@ pub fn validate_ssid(ssid: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub const OPEN_UPSTREAM_WARNING: &str = "Every device in radio range can use the upstream network.";
+
 pub fn validate_passphrase(mode: SecurityMode, passphrase: &str) -> Result<(), String> {
     match mode {
         SecurityMode::Open => {
@@ -176,6 +180,18 @@ pub fn validate_passphrase(mode: SecurityMode, passphrase: &str) -> Result<(), S
             }
             if !passphrase.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
                 return Err("The passphrase must use printable ASCII characters.".to_string());
+            }
+            if passphrase.starts_with(' ') || passphrase.ends_with(' ') {
+                return Err("The passphrase must not start or end with a space.".to_string());
+            }
+            if passphrase
+                .bytes()
+                .any(|byte| matches!(byte, b'\\' | b'"' | b'#'))
+            {
+                return Err(
+                    "The passphrase must not contain a backslash, a double quote, or a hash."
+                        .to_string(),
+                );
             }
             Ok(())
         }
@@ -349,17 +365,24 @@ impl Profile {
         } else {
             "off".to_string()
         };
-        vec![
+        let mut lines = vec![
             format!("Access-point interface: {}", self.ap_interface),
             format!("SSID: {}", self.ssid),
             format!("Security: {}", self.security.as_str()),
-            format!("Passphrase: {}", self.passphrase),
+            match self.security {
+                SecurityMode::Open => "Passphrase: the network is open".to_string(),
+                _ => "Passphrase: set".to_string(),
+            },
             format!("Band: {}", self.band.as_str()),
             format!("Channel: {}", self.channel),
             format!("Address range: {}", self.address_cidr),
             format!("DHCP: {dhcp}"),
             format!("Upstream interface: {}", self.upstream_interface),
-        ]
+        ];
+        if self.security == SecurityMode::Open && self.upstream_interface != "none" {
+            lines.push(OPEN_UPSTREAM_WARNING.to_string());
+        }
+        lines
     }
 }
 
@@ -384,13 +407,30 @@ pub fn default_profile_path() -> PathBuf {
 
 pub fn save_profile(path: &Path, profile: &Profile) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+                .map_err(|err| format!("The program cannot protect {}. {err}", parent.display()))?;
+        }
     }
     let text = serde_json::to_string_pretty(profile)
         .map_err(|err| format!("The profile cannot be encoded. {err}"))?;
-    fs::write(path, text + "\n")
-        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))
+    write_mode(path, &(text + "\n"), 0o600)
+}
+
+fn write_mode(path: &Path, contents: &str, mode: u32) -> Result<(), String> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .open(path)
+        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .map_err(|err| format!("The program cannot protect {}. {err}", path.display()))
 }
 
 pub fn load_profile(path: &Path) -> Result<Profile, String> {
@@ -454,6 +494,12 @@ mod tests {
         assert!(validate_passphrase(SecurityMode::Open, "secret").is_err());
         assert!(validate_passphrase(SecurityMode::Wpa2, "short").is_err());
         assert!(validate_passphrase(SecurityMode::Wpa3, "correct-horse").is_ok());
+        assert!(validate_passphrase(SecurityMode::Wpa2, "correct horse").is_ok());
+        assert!(validate_passphrase(SecurityMode::Wpa2, "correct-horse\\").is_err());
+        assert!(validate_passphrase(SecurityMode::Wpa2, "correct\"horse").is_err());
+        assert!(validate_passphrase(SecurityMode::Wpa2, "correct#horse").is_err());
+        assert!(validate_passphrase(SecurityMode::Wpa2, " correct-horse").is_err());
+        assert!(validate_passphrase(SecurityMode::Wpa2, "correct-horse ").is_err());
     }
 
     #[test]
@@ -519,7 +565,7 @@ mod tests {
             "wlan0",
             "Hotmon",
             "wpa2",
-            "correct-horse",
+            "Passphrase: set",
             "2.4",
             "6",
             "192.168.42.0/24",
@@ -528,6 +574,41 @@ mod tests {
         ] {
             assert!(lines.contains(text), "{text}");
         }
+        assert!(
+            !lines.contains("correct-horse"),
+            "the review screen shows the passphrase"
+        );
+    }
+
+    #[test]
+    fn review_for_an_open_network_hides_the_passphrase() {
+        let mut profile = sample_profile();
+        profile.security = SecurityMode::Open;
+        profile.passphrase.clear();
+        profile.upstream_interface = "none".to_string();
+        let lines = profile.review_lines().join("\n");
+        assert!(lines.contains("the network is open"));
+        assert!(!lines.contains(OPEN_UPSTREAM_WARNING));
+        profile.upstream_interface = "eth0".to_string();
+        let warned = profile.review_lines().join("\n");
+        assert!(warned.contains(OPEN_UPSTREAM_WARNING));
+        assert!(!warned.contains("correct-horse"));
+    }
+
+    #[test]
+    fn profile_directory_and_file_are_private() {
+        let dir = scratch_dir();
+        let path = dir.join("hotmon").join("profile.json");
+        save_profile(&path, &sample_profile()).unwrap();
+        let dir_mode = fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
