@@ -492,6 +492,8 @@ struct InstalledFiles {
     replaced_system: bool,
     created_system: bool,
     redirect: Option<PathBuf>,
+    previous_nft: Option<PathBuf>,
+    attempt_restore: Option<PathBuf>,
 }
 
 pub fn execute_plan(
@@ -525,22 +527,25 @@ pub fn execute_plan(
     }
     for command in &commands {
         if command.program == "hotmon-forward" {
-            if let Err(message) = enable_forwarding(paths, &command.args) {
-                let err =
-                    format!("The backend rejected the setting. hotmon-forward failed: {message}");
-                forwarding_set = paths.forwarding_record().exists();
-                return fail_start(
-                    err,
-                    &installed,
-                    runner,
-                    signals,
-                    paths,
-                    &started,
-                    nft_installed,
-                    forwarding_set,
-                );
+            match enable_forwarding(paths, &command.args) {
+                Ok(created) => forwarding_set = created,
+                Err(message) => {
+                    let err = format!(
+                        "The backend rejected the setting. hotmon-forward failed: {message}"
+                    );
+                    forwarding_set = paths.forwarding_record().is_file();
+                    return fail_start(
+                        err,
+                        &installed,
+                        runner,
+                        signals,
+                        paths,
+                        &started,
+                        nft_installed,
+                        forwarding_set,
+                    );
+                }
             }
-            forwarding_set = true;
             continue;
         }
         match runner.run(command) {
@@ -571,6 +576,12 @@ pub fn execute_plan(
     }
     for path in &installed.temporary {
         let _ = fs::remove_file(path);
+    }
+    if let Some(previous) = &installed.previous_nft {
+        let _ = fs::remove_file(previous);
+    }
+    if let Some(attempt) = &installed.attempt_restore {
+        let _ = fs::remove_file(attempt);
     }
     Ok(StartReport {
         started,
@@ -613,7 +624,13 @@ fn rollback(
 ) -> Result<(), String> {
     let mut cleanup_error = None;
     if nft_installed {
-        if let Err(err) = run_nft_delete(runner) {
+        if let Some(previous) = &installed.previous_nft {
+            let restore = PlannedCommand::new("nft", ["-f", previous.to_string_lossy().as_ref()]);
+            if let Err(err) = runner.run(&restore) {
+                cleanup_error = Some(format!("The firewall did not stop. {err}"));
+            }
+            let _ = fs::remove_file(previous);
+        } else if let Err(err) = run_nft_delete(runner) {
             cleanup_error = Some(err);
         }
     }
@@ -626,6 +643,19 @@ fn rollback(
     if forwarding_set {
         if let Err(err) = restore_forwarding(paths) {
             cleanup_error = Some(err);
+        }
+    }
+    if let Some(attempt) = &installed.attempt_restore {
+        if let Err(err) = fs::copy(attempt, &paths.hostapd_config) {
+            cleanup_error = Some(format!(
+                "The program cannot restore {}. {err}",
+                paths.hostapd_config.display()
+            ));
+        } else if let Err(err) = fs::remove_file(attempt) {
+            cleanup_error = Some(format!(
+                "The program cannot remove the backup {}. {err}",
+                attempt.display()
+            ));
         }
     }
     if installed.replaced_system {
@@ -758,6 +788,8 @@ fn install_files(
         replaced_system: false,
         created_system: false,
         redirect: None,
+        previous_nft: None,
+        attempt_restore: None,
     };
     if let Err(err) = install_files_into(plan, paths, &mut installed) {
         return Err((installed, err));
@@ -791,6 +823,11 @@ fn install_files_into(
                 })?;
             }
         }
+        if file.path == paths.nft_path() && file.path.is_file() {
+            let previous = paths.state_dir.join("hotmon.nft.previous");
+            copy_private(&file.path, &previous)?;
+            installed.previous_nft = Some(previous);
+        }
         write_text(&file.path, &file.contents, file.mode)?;
         if file.temporary {
             installed.temporary.push(file.path.clone());
@@ -818,12 +855,19 @@ fn install_system_hostapd(
     installed: &mut InstalledFiles,
 ) -> Result<(), String> {
     if file.path.exists() {
-        match copy_private(&file.path, &paths.hostapd_backup()) {
-            Ok(()) => {
-                installed.replaced_system = true;
-                write_text(&file.path, &file.contents, 0o600)?;
+        if paths.hostapd_backup().is_file() {
+            let attempt = paths.state_dir.join("hostapd.conf.attempt");
+            copy_private(&file.path, &attempt)?;
+            installed.attempt_restore = Some(attempt);
+            write_text(&file.path, &file.contents, 0o600)?;
+        } else {
+            match copy_private(&file.path, &paths.hostapd_backup()) {
+                Ok(()) => {
+                    installed.replaced_system = true;
+                    write_text(&file.path, &file.contents, 0o600)?;
+                }
+                Err(_) => install_private_hostapd(file, paths, installed)?,
             }
-            Err(_) => install_private_hostapd(file, paths, installed)?,
         }
         return Ok(());
     }
@@ -971,7 +1015,10 @@ fn write_bytes(path: &Path, contents: &[u8], mode: u32) -> Result<(), String> {
     write_result
 }
 
-fn enable_forwarding(paths: &Paths, ifaces: &[String]) -> Result<(), String> {
+fn enable_forwarding(paths: &Paths, ifaces: &[String]) -> Result<bool, String> {
+    if paths.forwarding_record().is_file() {
+        return Ok(false);
+    }
     let mut saved = Vec::new();
     for iface in ifaces {
         if !crate::iface::valid_name(iface) || iface == "all" || iface == "default" {
@@ -1004,7 +1051,7 @@ fn enable_forwarding(paths: &Paths, ifaces: &[String]) -> Result<(), String> {
     for (iface, _) in &saved {
         write_sysctl(&forwarding_path(paths, iface), "1\n")?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn forwarding_path(paths: &Paths, iface: &str) -> PathBuf {
@@ -1952,6 +1999,102 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("hotmon-forward"));
         assert_eq!(std::fs::read_to_string(&ap).unwrap().trim(), "0");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_failed_reapply_keeps_the_live_firewall_and_forwarding_record() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let ap = forwarding_path(&paths, "wlan0");
+        let upstream = forwarding_path(&paths, "eth0");
+        std::fs::create_dir_all(ap.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(upstream.parent().unwrap()).unwrap();
+        std::fs::write(&ap, "0\n").unwrap();
+        std::fs::write(&upstream, "0\n").unwrap();
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        let saved = std::fs::read_to_string(paths.forwarding_record()).unwrap();
+        assert!(saved.contains("wlan0 0"));
+        let mut runner = ScriptedRunner::with_results(vec![
+            Ok(String::new()),
+            Ok(String::new()),
+            Ok(String::new()),
+            Err("dnsmasq failed".to_string()),
+        ]);
+        let error = execute_plan(
+            &plan,
+            &mut runner,
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap_err();
+        assert!(error.contains("dnsmasq"));
+        assert_eq!(
+            std::fs::read_to_string(paths.forwarding_record()).unwrap(),
+            saved
+        );
+        assert!(!runner.calls.iter().any(|command| {
+            command.program == "nft" && command.args.iter().any(|arg| arg == "delete")
+        }));
+        assert!(runner.calls.iter().any(|command| {
+            command.program == "nft"
+                && command
+                    .args
+                    .iter()
+                    .any(|arg| arg.ends_with("hotmon.nft.previous"))
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_second_apply_keeps_the_original_hostapd_backup() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("etc").join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        std::fs::create_dir_all(paths.hostapd_config.parent().unwrap()).unwrap();
+        std::fs::write(&paths.hostapd_config, "original-config\n").unwrap();
+        let plan = plan_apply(BackendKind::ExistingHostapd, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(paths.hostapd_backup()).unwrap(),
+            "original-config\n"
+        );
+        restore_hostapd_backup(&paths).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&paths.hostapd_config).unwrap(),
+            "original-config\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
     }
