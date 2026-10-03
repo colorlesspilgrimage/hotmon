@@ -67,7 +67,7 @@ fn open_capture(app: &mut App) {
 fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let chunks = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(4),
         Constraint::Fill(1),
         Constraint::Length(3),
     ])
@@ -237,4 +237,46 @@ fn footer(app: &App) -> Paragraph<'static> {
         View::Monitor => "s: status  c: capture  z: stop capture  k: stop hotspot  q: quit",
     };
     Paragraph::new(text).block(Block::bordered().title("Keys"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use super::*;
+    use crate::backend::BackendKind;
+
+    fn buffer_text(app: &App) -> String {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, app))
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn rejection_message_is_visible_in_the_header() {
+        let mut app = App::from_parts(
+            BackendKind::NetworkManager,
+            Vec::new(),
+            PathBuf::from("/tmp/hotmon-header-test.json"),
+            None,
+        );
+        app.wizard.error = Some("The interface nope is not available.".to_string());
+        let text = buffer_text(&app);
+        assert!(
+            text.contains("The interface nope is not available."),
+            "header clipped the rejection message: {text}"
+        );
+    }
 }
