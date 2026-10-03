@@ -181,11 +181,17 @@ impl Runner for SystemRunner {
 
 pub struct SystemSignals;
 
+fn require_pid(pid: i32) -> Result<(), String> {
+    if pid <= 0 {
+        Err(format!("The process id {pid} is not valid."))
+    } else {
+        Ok(())
+    }
+}
+
 impl ProcessControl for SystemSignals {
     fn terminate(&mut self, pid: i32) -> Result<(), String> {
-        if pid <= 0 {
-            return Err(format!("The process id {pid} is not valid."));
-        }
+        require_pid(pid)?;
         let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
         if rc == 0 {
             Ok(())
@@ -239,9 +245,7 @@ pub struct RecordedSignals {
 #[cfg(test)]
 impl ProcessControl for RecordedSignals {
     fn terminate(&mut self, pid: i32) -> Result<(), String> {
-        if pid <= 0 {
-            return Err(format!("The process id {pid} is not valid."));
-        }
+        require_pid(pid)?;
         self.pids.push(pid);
         if self.fail {
             Err("The process did not stop.".to_string())
@@ -279,11 +283,9 @@ pub fn plan_stop(kind: BackendKind, profile: &Profile) -> Vec<PlannedCommand> {
         )],
         BackendKind::ExistingHostapd => vec![
             PlannedCommand::new("systemctl", ["stop", "hostapd"]),
-            PlannedCommand::new("nft", ["delete", "table", "inet", "hotmon"]).optional(),
+            delete_hotmon_table(),
         ],
-        BackendKind::Direct => {
-            vec![PlannedCommand::new("nft", ["delete", "table", "inet", "hotmon"]).optional()]
-        }
+        BackendKind::Direct => vec![delete_hotmon_table()],
     }
 }
 
@@ -309,12 +311,7 @@ pub fn read_pid_optional(path: &Path) -> Option<i32> {
 
 pub fn execute_plan(plan: &ApplyPlan, runner: &mut dyn Runner) -> Result<(), String> {
     for file in &plan.files {
-        if let Some(parent) = file.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
-        }
-        std::fs::write(&file.path, &file.contents)
-            .map_err(|err| format!("The program cannot write {}. {err}", file.path.display()))?;
+        crate::profile::prepare_and_write(&file.path, &file.contents)?;
     }
     for command in &plan.commands {
         if let Err(message) = runner.run(command) {
@@ -339,6 +336,41 @@ pub fn terminate_pids(signals: &mut dyn ProcessControl, pids: &[i32]) -> Result<
     Ok(())
 }
 
+fn delete_hotmon_table() -> PlannedCommand {
+    PlannedCommand::new("nft", ["delete", "table", "inet", "hotmon"]).optional()
+}
+
+fn push_wifi_security(add: &mut Vec<String>, profile: &Profile) {
+    let mgmt = match profile.security {
+        SecurityMode::Open => return,
+        SecurityMode::Wpa2 => "wpa-psk",
+        SecurityMode::Wpa3 => "sae",
+    };
+    add.extend([
+        "wifi-sec.key-mgmt".to_string(),
+        mgmt.to_string(),
+        "wifi-sec.psk".to_string(),
+        profile.passphrase.clone(),
+    ]);
+}
+
+fn append_hostapd_security(text: &mut String, profile: &Profile) {
+    let (key_mgmt, sae) = match profile.security {
+        SecurityMode::Open => return,
+        SecurityMode::Wpa2 => ("WPA-PSK", false),
+        SecurityMode::Wpa3 => ("SAE", true),
+    };
+    text.push_str(&format!("wpa=2\nwpa_passphrase={}\n", profile.passphrase));
+    if sae {
+        text.push_str(&format!("sae_password={}\n", profile.passphrase));
+    }
+    text.push_str(&format!("wpa_key_mgmt={key_mgmt}\n"));
+    if sae {
+        text.push_str("ieee80211w=2\n");
+    }
+    text.push_str("rsn_pairwise=CCMP\n");
+}
+
 fn nm_plan(profile: &Profile) -> ApplyPlan {
     let band = match profile.band {
         Band::Band24 => "bg",
@@ -349,19 +381,7 @@ fn nm_plan(profile: &Profile) -> ApplyPlan {
     } else {
         "manual"
     };
-    let gateway = profile
-        .network()
-        .and_then(|network| network.gateway())
-        .map(|addr| {
-            format!(
-                "{addr}/{}",
-                profile
-                    .network()
-                    .map(|network| network.prefix())
-                    .unwrap_or(24)
-            )
-        })
-        .unwrap_or_else(|_| profile.address_cidr.clone());
+    let gateway = profile.gateway_cidr();
     let mut add = vec![
         "connection".to_string(),
         "add".to_string(),
@@ -386,25 +406,7 @@ fn nm_plan(profile: &Profile) -> ApplyPlan {
         "ipv4.addresses".to_string(),
         gateway,
     ];
-    match profile.security {
-        SecurityMode::Open => {}
-        SecurityMode::Wpa2 => {
-            add.extend([
-                "wifi-sec.key-mgmt".to_string(),
-                "wpa-psk".to_string(),
-                "wifi-sec.psk".to_string(),
-                profile.passphrase.clone(),
-            ]);
-        }
-        SecurityMode::Wpa3 => {
-            add.extend([
-                "wifi-sec.key-mgmt".to_string(),
-                "sae".to_string(),
-                "wifi-sec.psk".to_string(),
-                profile.passphrase.clone(),
-            ]);
-        }
-    }
+    push_wifi_security(&mut add, profile);
     ApplyPlan {
         files: Vec::new(),
         commands: vec![
@@ -468,13 +470,7 @@ fn hostapd_plan(profile: &Profile, paths: &Paths, existing: bool) -> ApplyPlan {
             contents: nft_text(profile),
         },
     ];
-    let gateway = profile
-        .network()
-        .and_then(|network| {
-            let prefix = network.prefix();
-            network.gateway().map(|addr| format!("{addr}/{prefix}"))
-        })
-        .unwrap_or_else(|_| profile.address_cidr.clone());
+    let gateway = profile.gateway_cidr();
     let mut commands = vec![
         PlannedCommand::new("ip", ["link", "set", profile.ap_interface.as_str(), "up"]),
         PlannedCommand::new(
@@ -514,11 +510,7 @@ fn hostapd_plan(profile: &Profile, paths: &Paths, existing: bool) -> ApplyPlan {
             ],
         ));
     }
-    let tools: Vec<&str> = if existing {
-        vec!["hostapd", "dnsmasq", "nftables"]
-    } else {
-        direct_tools().to_vec()
-    };
+    let tools = direct_tools().to_vec();
     ApplyPlan {
         files,
         commands,
@@ -535,38 +527,18 @@ pub fn hostapd_conf_text(profile: &Profile) -> String {
         "interface={}\ndriver=nl80211\nssid={}\nhw_mode={hw_mode}\nchannel={}\nauth_algs=1\nignore_broadcast_ssid=0\n",
         profile.ap_interface, profile.ssid, profile.channel
     );
-    match profile.security {
-        SecurityMode::Open => {}
-        SecurityMode::Wpa2 => {
-            text.push_str(&format!(
-                "wpa=2\nwpa_passphrase={}\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n",
-                profile.passphrase
-            ));
-        }
-        SecurityMode::Wpa3 => {
-            text.push_str(&format!(
-                "wpa=2\nwpa_passphrase={}\nsae_password={}\nwpa_key_mgmt=SAE\nieee80211w=2\nrsn_pairwise=CCMP\n",
-                profile.passphrase, profile.passphrase
-            ));
-        }
-    }
+    append_hostapd_security(&mut text, profile);
     text
 }
 
 pub fn dnsmasq_conf_text(profile: &Profile) -> String {
-    let network = profile.network().ok();
-    let listen = network
-        .and_then(|network| network.gateway().ok())
-        .map(|addr| addr.to_string())
-        .unwrap_or_else(|| "0.0.0.0".to_string());
+    let listen = profile.gateway_text("0.0.0.0");
     let mut text = format!(
         "interface={}\nbind-interfaces\nexcept-interface=lo\nlisten-address={listen}\n",
         profile.ap_interface
     );
     if profile.dhcp_enabled {
-        let netmask = network
-            .map(|network| network.netmask().to_string())
-            .unwrap_or_else(|| "255.255.255.0".to_string());
+        let netmask = profile.netmask_text("255.255.255.0");
         text.push_str(&format!(
             "dhcp-range={},{},{netmask},12h\n",
             profile.dhcp_start, profile.dhcp_end
@@ -577,32 +549,30 @@ pub fn dnsmasq_conf_text(profile: &Profile) -> String {
     text
 }
 
+fn nft_table(body: &str) -> String {
+    format!("add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n{body}}}\n")
+}
+
 pub fn nft_text(profile: &Profile) -> String {
     if profile.upstream_interface == "none" {
-        return format!(
-            "add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{}\" drop\n  }}\n}}\n",
+        return nft_table(&format!(
+            "  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{}\" drop\n  }}\n",
             profile.ap_interface
-        );
+        ));
     }
-    format!(
-        "add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n  chain postrouting {{\n    type nat hook postrouting priority 100; policy accept;\n    oifname \"{}\" masquerade\n  }}\n  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{}\" oifname \"{}\" accept\n    iifname \"{}\" oifname \"{}\" ct state established,related accept\n  }}\n}}\n",
+    nft_table(&format!(
+        "  chain postrouting {{\n    type nat hook postrouting priority 100; policy accept;\n    oifname \"{}\" masquerade\n  }}\n  chain forward {{\n    type filter hook forward priority 0; policy accept;\n    iifname \"{}\" oifname \"{}\" accept\n    iifname \"{}\" oifname \"{}\" ct state established,related accept\n  }}\n",
         profile.upstream_interface,
         profile.ap_interface,
         profile.upstream_interface,
         profile.upstream_interface,
         profile.ap_interface
-    )
+    ))
 }
 
 pub fn iwd_profile(profile: &Profile) -> String {
-    let network = profile.network().ok();
-    let address = network
-        .and_then(|network| network.gateway().ok())
-        .map(|addr| addr.to_string())
-        .unwrap_or_else(|| "192.168.42.1".to_string());
-    let netmask = network
-        .map(|network| network.netmask().to_string())
-        .unwrap_or_else(|| "255.255.255.0".to_string());
+    let address = profile.gateway_text("192.168.42.1");
+    let netmask = profile.netmask_text("255.255.255.0");
     let mut text = format!("[General]\nChannel={}\n", profile.channel);
     if profile.security != SecurityMode::Open {
         text.push_str(&format!(

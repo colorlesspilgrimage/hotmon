@@ -7,13 +7,17 @@ pub struct LocalCapture {
     fd: OwnedFd,
 }
 
+fn invalid_capture_name() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "The capture interface name is not valid.",
+    )
+}
+
 impl LocalCapture {
     pub fn open(interface: &str) -> std::io::Result<Self> {
         if !iface::valid_name(interface) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "The capture interface name is not valid.",
-            ));
+            return Err(invalid_capture_name());
         }
         let fd = unsafe {
             libc::socket(
@@ -26,12 +30,7 @@ impl LocalCapture {
             return Err(std::io::Error::last_os_error());
         }
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        let name = std::ffi::CString::new(interface).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "The capture interface name is not valid.",
-            )
-        })?;
+        let name = std::ffi::CString::new(interface).map_err(|_| invalid_capture_name())?;
         let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
         if index == 0 {
             return Err(std::io::Error::last_os_error());

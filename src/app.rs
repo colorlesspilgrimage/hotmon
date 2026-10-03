@@ -112,20 +112,14 @@ impl App {
 
     pub fn apply_hotspot(&mut self, runner: &mut dyn Runner, paths: &Paths) -> Result<(), String> {
         if self.wizard.is_cancelled() {
-            let message = "The wizard is cancelled. The settings were not applied.".to_string();
-            self.notice = message.clone();
-            return Err(message);
+            return self.keep_error(crate::wizard::CANCELLED.to_string());
         }
         let profile = match self.wizard.confirmed_profile(&self.interfaces) {
             Ok(profile) => profile,
-            Err(err) => {
-                self.notice = err.clone();
-                return Err(err);
-            }
+            Err(err) => return self.keep_error(err),
         };
         if let Err(err) = profile::save_profile(&self.profile_path, &profile) {
-            self.notice = err.clone();
-            return Err(err);
+            return self.keep_error(err);
         }
         let plan = match backend::plan_apply(self.backend, &profile, paths) {
             Ok(plan) => plan,
@@ -167,8 +161,7 @@ impl App {
             tools: Vec::new(),
         };
         if let Err(err) = backend::execute_plan(&plan, runner) {
-            self.notice = err.clone();
-            return Err(err);
+            return self.keep_error(err);
         }
         let mut pids = Vec::new();
         if let Some(pid) = read_pid_optional(&paths.hostapd_pid()) {
@@ -178,8 +171,7 @@ impl App {
             pids.push(pid);
         }
         if let Err(err) = backend::terminate_pids(signals, &pids) {
-            self.notice = err.clone();
-            return Err(err);
+            return self.keep_error(err);
         }
         self.finish_stop();
         Ok(())
@@ -225,6 +217,11 @@ impl App {
         self.notice = self.capture.fail_open(message);
     }
 
+    fn keep_error(&mut self, err: String) -> Result<(), String> {
+        self.notice = err.clone();
+        Err(err)
+    }
+
     fn finish_stop(&mut self) {
         self.running = false;
         self.monitor.clear();
@@ -258,7 +255,7 @@ impl App {
             KeyCode::Esc => {
                 self.wizard.cancel();
                 self.view = View::Status;
-                self.notice = "The wizard is cancelled. The settings were not applied.".to_string();
+                self.notice = crate::wizard::CANCELLED.to_string();
                 Step::Continue
             }
             KeyCode::Left => {

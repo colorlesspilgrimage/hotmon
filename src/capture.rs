@@ -30,6 +30,20 @@ pub struct PacketSummary {
 }
 
 impl PacketSummary {
+    fn make(
+        length: usize,
+        source: impl Into<String>,
+        destination: impl Into<String>,
+        protocol: impl Into<String>,
+    ) -> Self {
+        Self {
+            length,
+            source: source.into(),
+            destination: destination.into(),
+            protocol: protocol.into(),
+        }
+    }
+
     pub fn text(&self) -> String {
         format!(
             "{} B {} -> {} {}",
@@ -166,14 +180,13 @@ pub fn capture_interface<'a>(requested: &'a str, hotspot: &'a str) -> Result<&'a
     Ok(hotspot)
 }
 
+fn unknown_summary(length: usize, protocol: &str) -> PacketSummary {
+    PacketSummary::make(length, "-", "-", protocol)
+}
+
 pub fn summarize(frame: &[u8]) -> PacketSummary {
     if frame.len() < 14 {
-        return PacketSummary {
-            length: frame.len(),
-            source: "-".to_string(),
-            destination: "-".to_string(),
-            protocol: "short".to_string(),
-        };
+        return unknown_summary(frame.len(), "short");
     }
     let mut ethertype = u16::from_be_bytes([frame[12], frame[13]]);
     let mut header = 14;
@@ -185,45 +198,20 @@ pub fn summarize(frame: &[u8]) -> PacketSummary {
     let dst_mac = format_mac(&frame[0..6]);
     match ethertype {
         0x0800 => summarize_ipv4(frame, header, frame.len()),
-        0x0806 => PacketSummary {
-            length: frame.len(),
-            source: src_mac,
-            destination: dst_mac,
-            protocol: "ARP".to_string(),
-        },
-        0x86dd => PacketSummary {
-            length: frame.len(),
-            source: src_mac,
-            destination: dst_mac,
-            protocol: "IPv6".to_string(),
-        },
-        other => PacketSummary {
-            length: frame.len(),
-            source: src_mac,
-            destination: dst_mac,
-            protocol: format!("eth {other:04x}"),
-        },
+        0x0806 => PacketSummary::make(frame.len(), src_mac, dst_mac, "ARP"),
+        0x86dd => PacketSummary::make(frame.len(), src_mac, dst_mac, "IPv6"),
+        other => PacketSummary::make(frame.len(), src_mac, dst_mac, format!("eth {other:04x}")),
     }
 }
 
 fn summarize_ipv4(frame: &[u8], header: usize, length: usize) -> PacketSummary {
     if frame.len() < header + 20 {
-        return PacketSummary {
-            length,
-            source: "-".to_string(),
-            destination: "-".to_string(),
-            protocol: "truncated".to_string(),
-        };
+        return unknown_summary(length, "truncated");
     }
     let ip = &frame[header..];
     let ihl = (ip[0] & 0x0f) as usize * 4;
     if ihl < 20 || ip.len() < ihl {
-        return PacketSummary {
-            length,
-            source: "-".to_string(),
-            destination: "-".to_string(),
-            protocol: "truncated".to_string(),
-        };
+        return unknown_summary(length, "truncated");
     }
     let protocol = ip[9];
     let source = std::net::Ipv4Addr::new(ip[12], ip[13], ip[14], ip[15]).to_string();
@@ -234,12 +222,7 @@ fn summarize_ipv4(frame: &[u8], header: usize, length: usize) -> PacketSummary {
         17 => port_text("UDP", ip, ihl),
         other => format!("ip {other}"),
     };
-    PacketSummary {
-        length,
-        source,
-        destination,
-        protocol: proto,
-    }
+    PacketSummary::make(length, source, destination, proto)
 }
 
 fn port_text(name: &str, ip: &[u8], ihl: usize) -> String {

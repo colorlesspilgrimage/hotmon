@@ -148,10 +148,7 @@ pub fn parse_band(text: &str) -> Result<Band, String> {
 }
 
 pub fn validate_ssid(ssid: &str) -> Result<(), String> {
-    if ssid.is_empty() || ssid == "." || ssid == ".." {
-        return Err("The SSID must contain 1 to 32 characters.".to_string());
-    }
-    if ssid.len() > 32 {
+    if ssid.is_empty() || ssid == "." || ssid == ".." || ssid.len() > 32 {
         return Err("The SSID must contain 1 to 32 characters.".to_string());
     }
     if ssid.chars().any(|ch| ch.is_control() || ch == '/') {
@@ -237,11 +234,30 @@ pub fn parse_dhcp_flag(text: &str) -> Result<bool, String> {
     }
 }
 
+fn interface_unavailable(name: &str) -> String {
+    format!("The interface {name} is not available.")
+}
+
 pub fn validate_interface(name: &str, interfaces: &[IfaceInfo]) -> Result<(), String> {
     let Some(info) = interfaces.iter().find(|info| info.name == name) else {
-        return Err(format!("The interface {name} is not available."));
+        return Err(interface_unavailable(name));
     };
     iface::require_ap(info)
+}
+
+fn upstream_name_error(name: &str, ap_interface: &str) -> Option<String> {
+    if name.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    if !iface::valid_name(name) {
+        return Some("The upstream interface name is not valid.".to_string());
+    }
+    if name == ap_interface {
+        return Some(
+            "The upstream interface must be different from the access-point interface.".to_string(),
+        );
+    }
+    None
 }
 
 pub fn validate_upstream(
@@ -249,19 +265,14 @@ pub fn validate_upstream(
     ap_interface: &str,
     interfaces: &[IfaceInfo],
 ) -> Result<String, String> {
+    if let Some(message) = upstream_name_error(name, ap_interface) {
+        return Err(message);
+    }
     if name.eq_ignore_ascii_case("none") {
         return Ok("none".to_string());
     }
-    if !iface::valid_name(name) {
-        return Err("The upstream interface name is not valid.".to_string());
-    }
-    if name == ap_interface {
-        return Err(
-            "The upstream interface must be different from the access-point interface.".to_string(),
-        );
-    }
     if !interfaces.iter().any(|info| info.name == name) {
-        return Err(format!("The interface {name} is not available."));
+        return Err(interface_unavailable(name));
     }
     Ok(name.to_string())
 }
@@ -311,36 +322,49 @@ impl Profile {
         }
         validate_ssid(&self.ssid)?;
         validate_passphrase(self.security, &self.passphrase)?;
-        if !channel_allowed(self.band, self.channel) {
-            return Err(format!(
-                "The channel {} is not valid for the {} GHz band.",
-                self.channel,
-                self.band.as_str()
-            ));
-        }
+        parse_channel(self.band, &self.channel.to_string())?;
         validate_address_dhcp(
             &self.address_cidr,
             if self.dhcp_enabled { "on" } else { "off" },
             &self.dhcp_start,
             &self.dhcp_end,
         )?;
-        if self.upstream_interface.eq_ignore_ascii_case("none") {
-            return Ok(());
-        }
-        if !iface::valid_name(&self.upstream_interface) {
-            return Err("The upstream interface name is not valid.".to_string());
-        }
-        if self.upstream_interface == self.ap_interface {
-            return Err(
-                "The upstream interface must be different from the access-point interface."
-                    .to_string(),
-            );
+        if let Some(message) = upstream_name_error(&self.upstream_interface, &self.ap_interface) {
+            return Err(message);
         }
         Ok(())
     }
 
     pub fn network(&self) -> Result<Ipv4Network, String> {
         Ipv4Network::parse(&self.address_cidr)
+    }
+
+    pub fn gateway_cidr(&self) -> String {
+        self.network()
+            .ok()
+            .and_then(|network| {
+                let prefix = network.prefix();
+                network
+                    .gateway()
+                    .ok()
+                    .map(|addr| format!("{addr}/{prefix}"))
+            })
+            .unwrap_or_else(|| self.address_cidr.clone())
+    }
+
+    pub fn gateway_text(&self, fallback: &str) -> String {
+        self.network()
+            .ok()
+            .and_then(|network| network.gateway().ok())
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    pub fn netmask_text(&self, fallback: &str) -> String {
+        self.network()
+            .ok()
+            .map(|network| network.netmask().to_string())
+            .unwrap_or_else(|| fallback.to_string())
     }
 
     pub fn review_lines(&self) -> Vec<String> {
@@ -382,15 +406,19 @@ pub fn default_profile_path() -> PathBuf {
     profile_path_from(xdg.as_deref(), home.as_deref())
 }
 
-pub fn save_profile(path: &Path, profile: &Profile) -> Result<(), String> {
+pub(crate) fn prepare_and_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
     }
+    fs::write(path, contents)
+        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))
+}
+
+pub fn save_profile(path: &Path, profile: &Profile) -> Result<(), String> {
     let text = serde_json::to_string_pretty(profile)
         .map_err(|err| format!("The profile cannot be encoded. {err}"))?;
-    fs::write(path, text + "\n")
-        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))
+    prepare_and_write(path, text + "\n")
 }
 
 pub fn load_profile(path: &Path) -> Result<Profile, String> {

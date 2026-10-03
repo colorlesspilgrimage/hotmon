@@ -4,6 +4,8 @@ use crate::profile::{
     validate_passphrase, validate_ssid, validate_upstream,
 };
 
+pub const CANCELLED: &str = "The wizard is cancelled. The settings were not applied.";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Interface,
@@ -198,21 +200,14 @@ impl Wizard {
     }
 
     pub fn next(&mut self, interfaces: &[IfaceInfo]) -> Result<(), String> {
-        if self.cancelled {
-            let message = "The wizard is cancelled. The settings were not applied.".to_string();
-            self.error = Some(message.clone());
-            return Err(message);
-        }
+        self.ensure_open()?;
         if let Err(message) = self.validate_current(interfaces) {
-            self.error = Some(message.clone());
-            return Err(message);
+            return self.fail(message);
         }
         self.normalize_current();
         let index = self.page.index();
         if index + 1 >= ORDER.len() {
-            let message = "Use confirm on the review page.".to_string();
-            self.error = Some(message.clone());
-            return Err(message);
+            return self.fail("Use confirm on the review page.".to_string());
         }
         self.page = ORDER[index + 1];
         self.field = 0;
@@ -250,26 +245,30 @@ impl Wizard {
     }
 
     pub fn confirmed_profile(&mut self, interfaces: &[IfaceInfo]) -> Result<Profile, String> {
-        if self.cancelled {
-            let message = "The wizard is cancelled. The settings were not applied.".to_string();
-            self.error = Some(message.clone());
-            return Err(message);
-        }
+        self.ensure_open()?;
         if self.page != Page::Review {
-            let message = "Confirm the settings on the review page.".to_string();
-            self.error = Some(message.clone());
-            return Err(message);
+            return self.fail("Confirm the settings on the review page.".to_string());
         }
         match self.build_profile(interfaces) {
             Ok(profile) => {
                 self.error = None;
                 Ok(profile)
             }
-            Err(message) => {
-                self.error = Some(message.clone());
-                Err(message)
-            }
+            Err(message) => self.fail(message),
         }
+    }
+
+    fn ensure_open(&mut self) -> Result<(), String> {
+        if self.cancelled {
+            self.fail(CANCELLED.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn fail<T>(&mut self, message: String) -> Result<T, String> {
+        self.error = Some(message.clone());
+        Err(message)
     }
 
     fn validate_current(&self, interfaces: &[IfaceInfo]) -> Result<(), String> {
