@@ -55,6 +55,7 @@ pub struct App {
     pub active: Option<Profile>,
     pub loaded_profile: bool,
     pub started: Vec<StartedProc>,
+    pub private_hostapd: bool,
     pub open_extra: bool,
     pub open_upstream_ok: bool,
 }
@@ -98,6 +99,7 @@ impl App {
             active: None,
             loaded_profile,
             started: Vec::new(),
+            private_hostapd: false,
             open_extra: false,
             open_upstream_ok: false,
         }
@@ -157,15 +159,17 @@ impl App {
                 return Err(err);
             }
         };
-        let started = match backend::execute_plan(&plan, runner, signals, paths) {
-            Ok(started) => started,
+        let report = match backend::execute_plan(&plan, runner, signals, paths) {
+            Ok(report) => report,
             Err(err) => {
                 self.started.clear();
+                self.private_hostapd = false;
                 self.fail_apply(err.clone());
                 return Err(err);
             }
         };
-        self.started = started;
+        self.started = report.started;
+        self.private_hostapd = report.private_hostapd;
         self.status = HotspotStatus::Running {
             ssid: profile.ssid.clone(),
             interface: profile.ap_interface.clone(),
@@ -174,11 +178,23 @@ impl App {
         self.active = Some(profile.clone());
         self.running = true;
         self.view = View::Status;
+        let interface_changed = self
+            .capture
+            .bound_interface()
+            .is_some_and(|iface| iface != profile.ap_interface);
+        if interface_changed {
+            self.capture.stop();
+            let _ = self.capture.warn(&profile.ap_interface);
+        }
         if let Err(err) = profile::save_profile(&self.profile_path, &profile) {
             self.notice = err.clone();
             return Err(err);
         }
-        self.notice = "The hotspot is active.".to_string();
+        self.notice = if interface_changed {
+            capture::CAPTURE_WARNING.to_string()
+        } else {
+            "The hotspot is active.".to_string()
+        };
         Ok(())
     }
 
@@ -193,9 +209,11 @@ impl App {
             self.finish_stop();
             return Ok(());
         };
-        if let Err(err) =
-            backend::run_stop_commands(&backend::plan_stop(self.backend, &profile), runner)
-        {
+        let mut commands = backend::plan_stop(self.backend, &profile);
+        if self.private_hostapd {
+            commands.retain(|command| command.program != "systemctl");
+        }
+        if let Err(err) = backend::run_stop_commands(&commands, runner) {
             self.notice = err.clone();
             return Err(err);
         }
@@ -226,6 +244,7 @@ impl App {
         }
         let _ = std::fs::remove_file(paths.nm_secret());
         self.started.clear();
+        self.private_hostapd = false;
         self.finish_stop();
         Ok(())
     }
@@ -258,12 +277,19 @@ impl App {
     pub fn tick(&mut self, runner: &mut dyn Runner) {
         if self.running {
             if let Err(err) = self.refresh_clients(runner) {
-                self.notice = err;
+                self.replace_notice(err);
             }
         }
         if let Err(err) = self.capture.poll() {
-            self.notice = err;
+            self.replace_notice(err);
         }
+    }
+
+    fn replace_notice(&mut self, message: String) {
+        if self.capture.is_warned() && message != capture::CAPTURE_WARNING {
+            self.capture.dismiss_warning();
+        }
+        self.notice = message;
     }
 
     pub fn capture_open_failed(&mut self, message: String) {
@@ -424,6 +450,10 @@ impl App {
     }
 
     fn accept_capture(&mut self) -> Step {
+        if self.notice != capture::CAPTURE_WARNING {
+            self.capture.dismiss_warning();
+            return Step::Continue;
+        }
         let iface = match self.hotspot_iface() {
             Ok(iface) => iface.to_string(),
             Err(_) => return Step::Continue,
@@ -833,5 +863,116 @@ mod tests {
         assert!(!iwd_path.exists());
         assert_eq!(iwd.status, HotspotStatus::Stopped);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enter_does_not_start_capture_after_the_warning_leaves() {
+        let dir = scratch_dir();
+        let mut app = loaded_app(&dir);
+        let paths = test_paths(&dir);
+        app.apply_hotspot(
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        app.view = View::Monitor;
+        assert_eq!(
+            app.on_key(KeyCode::Char('c'), KeyModifiers::NONE),
+            Step::Continue
+        );
+        assert!(app.capture.is_warned());
+        app.tick(&mut ScriptedRunner::with_results(vec![Err(
+            "station dump failed".to_string(),
+        )]));
+        assert!(!app.notice.contains("Press Enter"));
+        assert!(!app.capture.is_warned());
+        assert_eq!(
+            app.on_key(KeyCode::Enter, KeyModifiers::NONE),
+            Step::Continue
+        );
+        assert!(!app.capture.is_running());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_interface_shows_the_capture_warning_again() {
+        let dir = scratch_dir();
+        let mut app = loaded_app(&dir);
+        app.interfaces.push(crate::iface::IfaceInfo {
+            name: "wlan2".to_string(),
+            wireless: true,
+            supports_ap: true,
+        });
+        let paths = test_paths(&dir);
+        app.apply_hotspot(
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        app.view = View::Monitor;
+        app.on_key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert_eq!(
+            app.on_key(KeyCode::Enter, KeyModifiers::NONE),
+            Step::OpenCapture
+        );
+        app.wizard.ap_interface = "wlan2".to_string();
+        app.apply_hotspot(
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        assert!(app.capture.is_warned());
+        assert!(!app.capture.is_running());
+        assert!(app.notice.contains("Press Enter"));
+        assert_eq!(app.capture.bound_interface(), Some("wlan2"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_private_hostapd_stop_does_not_stop_the_system_service() {
+        let dir = scratch_dir();
+        let paths = test_paths(&dir);
+        fs::create_dir_all(paths.hostapd_config.parent().unwrap()).unwrap();
+        fs::write(&paths.hostapd_config, "original-config\n").unwrap();
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::create_dir_all(paths.hostapd_backup()).unwrap();
+        let mut app = App::from_parts(
+            BackendKind::ExistingHostapd,
+            sample_interfaces(),
+            dir.join("profile.json"),
+            Some(sample_profile()),
+        );
+        app.apply_hotspot(
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        assert!(app.private_hostapd);
+        assert_eq!(
+            fs::read_to_string(&paths.hostapd_config).unwrap(),
+            "original-config\n"
+        );
+        let mut runner = ScriptedRunner::default();
+        app.stop_hotspot(&mut runner, &mut RecordedSignals::default(), &paths)
+            .unwrap();
+        assert!(!runner
+            .calls
+            .iter()
+            .any(|command| command.program == "systemctl"));
+        assert_eq!(app.status, HotspotStatus::Stopped);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn test_paths(dir: &std::path::Path) -> crate::backend::Paths {
+        crate::backend::Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("etc").join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        }
     }
 }

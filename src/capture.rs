@@ -65,6 +65,14 @@ impl CaptureControl {
         self.phase == CapturePhase::Running
     }
 
+    pub fn bound_interface(&self) -> Option<&str> {
+        if self.phase == CapturePhase::Idle || self.iface.is_empty() {
+            None
+        } else {
+            Some(self.iface.as_str())
+        }
+    }
+
     pub fn armed_interface(&self) -> Option<&str> {
         if self.phase == CapturePhase::Armed {
             Some(self.iface.as_str())

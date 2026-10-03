@@ -221,6 +221,12 @@ pub struct StartedProc {
     pub name: String,
 }
 
+#[derive(Debug)]
+pub struct StartReport {
+    pub started: Vec<StartedProc>,
+    pub private_hostapd: bool,
+}
+
 pub trait ProcessControl {
     fn describe(&mut self, pid: i32) -> Option<String>;
     fn running(&mut self, pid: i32) -> bool;
@@ -493,8 +499,23 @@ pub fn execute_plan(
     runner: &mut dyn Runner,
     signals: &mut dyn ProcessControl,
     paths: &Paths,
-) -> Result<Vec<StartedProc>, String> {
-    let installed = install_files(plan, paths)?;
+) -> Result<StartReport, String> {
+    let installed = match install_files(plan, paths) {
+        Ok(installed) => installed,
+        Err((installed, message)) => {
+            return fail_start(
+                message,
+                &installed,
+                runner,
+                signals,
+                paths,
+                &[],
+                false,
+                false,
+            );
+        }
+    };
+    let private_hostapd = installed.redirect.is_some();
     let mut started = Vec::new();
     let mut nft_installed = false;
     let mut forwarding_set = false;
@@ -507,6 +528,7 @@ pub fn execute_plan(
             if let Err(message) = enable_forwarding(paths, &command.args) {
                 let err =
                     format!("The backend rejected the setting. hotmon-forward failed: {message}");
+                forwarding_set = paths.forwarding_record().exists();
                 return fail_start(
                     err,
                     &installed,
@@ -550,7 +572,10 @@ pub fn execute_plan(
     for path in &installed.temporary {
         let _ = fs::remove_file(path);
     }
-    Ok(started)
+    Ok(StartReport {
+        started,
+        private_hostapd,
+    })
 }
 
 fn fail_start(
@@ -562,7 +587,7 @@ fn fail_start(
     started: &[StartedProc],
     nft_installed: bool,
     forwarding_set: bool,
-) -> Result<Vec<StartedProc>, String> {
+) -> Result<StartReport, String> {
     match rollback(
         installed,
         runner,
@@ -685,7 +710,7 @@ pub fn restore_forwarding(paths: &Paths) -> Result<(), String> {
 
 pub fn restore_hostapd_backup(paths: &Paths) -> Result<(), String> {
     let backup = paths.hostapd_backup();
-    if backup.exists() {
+    if backup.is_file() {
         fs::copy(&backup, &paths.hostapd_config).map_err(|err| {
             format!(
                 "The program cannot restore {}. {err}",
@@ -723,8 +748,10 @@ pub fn retire_iwd_profile(path: &Path) -> Result<(), String> {
     })
 }
 
-fn install_files(plan: &ApplyPlan, paths: &Paths) -> Result<InstalledFiles, String> {
-    secure_state_dir(&paths.state_dir)?;
+fn install_files(
+    plan: &ApplyPlan,
+    paths: &Paths,
+) -> Result<InstalledFiles, (InstalledFiles, String)> {
     let mut installed = InstalledFiles {
         temporary: Vec::new(),
         failure_secrets: Vec::new(),
@@ -732,9 +759,21 @@ fn install_files(plan: &ApplyPlan, paths: &Paths) -> Result<InstalledFiles, Stri
         created_system: false,
         redirect: None,
     };
+    if let Err(err) = install_files_into(plan, paths, &mut installed) {
+        return Err((installed, err));
+    }
+    Ok(installed)
+}
+
+fn install_files_into(
+    plan: &ApplyPlan,
+    paths: &Paths,
+    installed: &mut InstalledFiles,
+) -> Result<(), String> {
+    secure_state_dir(&paths.state_dir)?;
     for file in &plan.files {
         if file.path == paths.hostapd_config && file.path != paths.direct_hostapd_conf() {
-            install_system_hostapd(file, paths, &mut installed)?;
+            install_system_hostapd(file, paths, installed)?;
             continue;
         }
         if file.path.parent() == Some(paths.dnsmasq_dir().as_path()) {
@@ -770,7 +809,7 @@ fn install_files(plan: &ApplyPlan, paths: &Paths) -> Result<InstalledFiles, Stri
             write_text(&paths.dnsmasq_lease(), "", 0o666)?;
         }
     }
-    Ok(installed)
+    Ok(())
 }
 
 fn install_system_hostapd(
@@ -781,28 +820,25 @@ fn install_system_hostapd(
     if file.path.exists() {
         match copy_private(&file.path, &paths.hostapd_backup()) {
             Ok(()) => {
-                write_text(&file.path, &file.contents, 0o600)?;
                 installed.replaced_system = true;
+                write_text(&file.path, &file.contents, 0o600)?;
             }
-            Err(_) => {
-                let private = paths.direct_hostapd_conf();
-                write_text(&private, &file.contents, 0o600)?;
-                installed.redirect = Some(private.clone());
-                installed.failure_secrets.push(private);
-            }
+            Err(_) => install_private_hostapd(file, paths, installed)?,
         }
         return Ok(());
     }
-    if let Some(parent) = file.path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
-        }
-    }
-    write_text(&file.path, &file.contents, 0o600)?;
-    write_text(&paths.created_marker(), "1\n", 0o600)?;
-    installed.created_system = true;
-    installed.failure_secrets.push(paths.created_marker());
+    install_private_hostapd(file, paths, installed)
+}
+
+fn install_private_hostapd(
+    file: &PlanFile,
+    paths: &Paths,
+    installed: &mut InstalledFiles,
+) -> Result<(), String> {
+    let private = paths.direct_hostapd_conf();
+    write_text(&private, &file.contents, 0o600)?;
+    installed.redirect = Some(private.clone());
+    installed.failure_secrets.push(private);
     Ok(())
 }
 
@@ -902,21 +938,41 @@ fn write_bytes(path: &Path, contents: &[u8], mode: u32) -> Result<(), String> {
                 .map_err(|err| format!("The program cannot prepare {}. {err}", parent.display()))?;
         }
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(mode)
-        .open(path)
-        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
-    file.write_all(contents)
-        .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .map_err(|err| format!("The program cannot protect {}. {err}", path.display()))
+    let temporary = match path.file_name() {
+        Some(name) => {
+            let mut file_name = std::ffi::OsString::from(".");
+            file_name.push(name);
+            file_name.push(".hotmon-tmp");
+            path.with_file_name(file_name)
+        }
+        None => path.to_path_buf(),
+    };
+    let write_result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(&temporary)
+            .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+        file.write_all(contents)
+            .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+        file.sync_all()
+            .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(mode))
+            .map_err(|err| format!("The program cannot protect {}. {err}", path.display()))?;
+        fs::rename(&temporary, path)
+            .map_err(|err| format!("The program cannot write {}. {err}", path.display()))?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
 }
 
 fn enable_forwarding(paths: &Paths, ifaces: &[String]) -> Result<(), String> {
-    let mut lines = Vec::new();
+    let mut saved = Vec::new();
     for iface in ifaces {
         if !crate::iface::valid_name(iface) || iface == "all" || iface == "default" {
             return Err(format!("Forwarding is not set for the interface {iface}."));
@@ -932,24 +988,22 @@ fn enable_forwarding(paths: &Paths, ifaces: &[String]) -> Result<(), String> {
                 "The forwarding control for {iface} is not available."
             ));
         } else {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|err| {
-                    format!("The program cannot prepare {}. {err}", parent.display())
-                })?;
-            }
             "0".to_string()
         };
         if previous != "0" && previous != "1" {
             return Err(format!("The forwarding value for {iface} is not valid."));
         }
-        write_sysctl(&path, "1\n")?;
-        lines.push(format!("{iface} {previous}"));
+        saved.push((iface.clone(), previous));
     }
-    write_text(
-        &paths.forwarding_record(),
-        &format!("{}\n", lines.join("\n")),
-        0o600,
-    )?;
+    let record = saved
+        .iter()
+        .map(|(iface, previous)| format!("{iface} {previous}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    write_text(&paths.forwarding_record(), &format!("{record}\n"), 0o600)?;
+    for (iface, _) in &saved {
+        write_sysctl(&forwarding_path(paths, iface), "1\n")?;
+    }
     Ok(())
 }
 
@@ -1785,6 +1839,121 @@ mod tests {
         assert!(runner.saw_private_secret);
         assert!(!paths.nm_secret().exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_file_install_removes_the_secret() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("kept.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        std::fs::create_dir_all(&paths.state_dir).unwrap();
+        std::fs::create_dir_all(paths.nft_path()).unwrap();
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        let error = execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap_err();
+        assert!(error.contains("cannot write"));
+        assert!(!paths.direct_hostapd_conf().exists());
+        let dns = paths.dnsmasq_conf();
+        if dns.exists() {
+            assert!(!std::fs::read_to_string(dns).unwrap().contains("correct-horse"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_failed_file_install_restores_the_system_file() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("etc").join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        std::fs::create_dir_all(paths.hostapd_config.parent().unwrap()).unwrap();
+        std::fs::write(&paths.hostapd_config, "original-config\n").unwrap();
+        std::fs::create_dir_all(&paths.state_dir).unwrap();
+        std::fs::create_dir_all(paths.nft_path()).unwrap();
+        let plan = plan_apply(BackendKind::ExistingHostapd, &sample_profile(), &paths).unwrap();
+        let error = execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap_err();
+        assert!(error.contains("cannot write"));
+        assert_eq!(
+            std::fs::read_to_string(&paths.hostapd_config).unwrap(),
+            "original-config\n"
+        );
+        assert!(!paths.hostapd_backup().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_missing_system_file_uses_the_private_file() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("etc").join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        std::fs::create_dir_all(paths.hostapd_config.parent().unwrap()).unwrap();
+        let plan = plan_apply(BackendKind::ExistingHostapd, &sample_profile(), &paths).unwrap();
+        let mut runner = ScriptedRunner::default();
+        let report = execute_plan(&plan, &mut runner, &mut RecordedSignals::default(), &paths)
+            .unwrap();
+        assert!(report.private_hostapd);
+        assert!(!paths.hostapd_config.exists());
+        assert!(paths.direct_hostapd_conf().exists());
+        assert!(runner.calls.iter().any(|command| command.program == "hostapd"));
+        assert!(!runner
+            .calls
+            .iter()
+            .any(|command| command.program == "systemctl"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_failed_forwarding_change_restores_the_first_interface() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let ap = forwarding_path(&paths, "wlan0");
+        std::fs::create_dir_all(ap.parent().unwrap()).unwrap();
+        std::fs::write(&ap, "0\n").unwrap();
+        let upstream = paths.proc_root.join("sys/net/ipv4/conf/eth0");
+        std::fs::create_dir_all(upstream.parent().unwrap()).unwrap();
+        std::fs::write(&upstream, "not-a-directory\n").unwrap();
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        let error = execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap_err();
+        assert!(error.contains("hotmon-forward"));
+        assert_eq!(std::fs::read_to_string(&ap).unwrap().trim(), "0");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
     }
 }
 
