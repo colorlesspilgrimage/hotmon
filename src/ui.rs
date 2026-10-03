@@ -134,6 +134,20 @@ fn field_line(field: &crate::wizard::FieldLine) -> Line<'static> {
     Line::from(format!("{mark} {}: {}", field.label, field.value))
 }
 
+fn capture_lines(app: &App, count: usize) -> Vec<Line<'static>> {
+    app.capture
+        .recent_lines(count)
+        .into_iter()
+        .map(|line| Line::from(line.to_string()))
+        .collect()
+}
+
+fn traffic_graph<'a>(title: String, data: &'a [u64]) -> Sparkline<'a> {
+    Sparkline::default()
+        .block(Block::bordered().title(title))
+        .data(data)
+}
+
 fn preview_profile(app: &App) -> Result<crate::profile::Profile, String> {
     let mut wizard = app.wizard.clone();
     wizard.confirmed_profile(&app.interfaces)
@@ -160,9 +174,7 @@ fn status_body(app: &App) -> Paragraph<'_> {
     }
     if app.capture.is_running() {
         lines.push(Line::from("Capture is active."));
-        for line in app.capture.recent_lines(5) {
-            lines.push(Line::from(line.to_string()));
-        }
+        lines.extend(capture_lines(app, 5));
     }
     Paragraph::new(lines)
         .block(Block::bordered().title("Status"))
@@ -179,10 +191,10 @@ fn draw_monitor(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     constraints.push(Constraint::Fill(1));
     let chunks = Layout::vertical(constraints).split(area);
     let total = app.monitor.total_samples();
-    let total_line = Sparkline::default()
-        .block(Block::bordered().title("Total traffic"))
-        .data(&total);
-    frame.render_widget(total_line, chunks[0]);
+    frame.render_widget(
+        traffic_graph("Total traffic".to_string(), &total),
+        chunks[0],
+    );
     let mut packet_lines = vec![Line::from(if app.capture.is_running() {
         "Capture is active."
     } else {
@@ -191,9 +203,7 @@ fn draw_monitor(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if app.capture.recent_lines(1).is_empty() {
         packet_lines.push(Line::from("No packets."));
     } else {
-        for line in app.capture.recent_lines(4) {
-            packet_lines.push(Line::from(line.to_string()));
-        }
+        packet_lines.extend(capture_lines(app, 4));
     }
     frame.render_widget(
         Paragraph::new(packet_lines).block(Block::bordered().title("Packets")),
@@ -205,10 +215,7 @@ fn draw_monitor(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             "{} rx {} tx {}",
             client.mac, client.rx_bytes, client.tx_bytes
         );
-        let spark = Sparkline::default()
-            .block(Block::bordered().title(title))
-            .data(&samples);
-        frame.render_widget(spark, chunks[index + 2]);
+        frame.render_widget(traffic_graph(title, &samples), chunks[index + 2]);
     }
     if clients.is_empty() {
         frame.render_widget(

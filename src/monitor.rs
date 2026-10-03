@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+const GRAPH_CAPACITY: usize = 40;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientSnapshot {
     pub mac: String,
@@ -61,7 +63,7 @@ impl MonitorState {
     pub fn new() -> Self {
         Self {
             clients: BTreeMap::new(),
-            total: Series::new(40),
+            total: Series::new(GRAPH_CAPACITY),
         }
     }
 
@@ -81,7 +83,7 @@ impl MonitorState {
                     ip: None,
                     rx_bytes: 0,
                     tx_bytes: 0,
-                    graph: Series::new(40),
+                    graph: Series::new(GRAPH_CAPACITY),
                 });
             entry.ip = client.ip.clone();
             entry.rx_bytes = client.rx_bytes;
@@ -102,7 +104,7 @@ impl MonitorState {
 
     pub fn clear(&mut self) {
         self.clients.clear();
-        self.total = Series::new(40);
+        self.total = Series::new(GRAPH_CAPACITY);
     }
 }
 
