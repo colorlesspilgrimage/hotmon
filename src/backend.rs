@@ -646,19 +646,22 @@ fn rollback(
     forwarding_set: bool,
 ) -> Result<(), String> {
     let mut cleanup_error = None;
-    if nft_installed {
-        if let Some(previous) = &installed.previous_nft {
+    if let Some(previous) = &installed.previous_nft {
+        if nft_installed {
             let restore = PlannedCommand::new("nft", ["-f", previous.to_string_lossy().as_ref()]);
             if let Err(err) = runner.run(&restore) {
                 cleanup_error = Some(format!("The firewall did not stop. {err}"));
-            } else if let Err(err) = fs::copy(previous, paths.nft_path()) {
-                cleanup_error = Some(format!(
-                    "The program cannot restore {}. {err}",
-                    paths.nft_path().display()
-                ));
             }
-            let _ = fs::remove_file(previous);
-        } else if let Err(err) = run_nft_delete(runner) {
+        }
+        if let Err(err) = fs::copy(previous, paths.nft_path()) {
+            cleanup_error = Some(format!(
+                "The program cannot restore {}. {err}",
+                paths.nft_path().display()
+            ));
+        }
+        let _ = fs::remove_file(previous);
+    } else if nft_installed {
+        if let Err(err) = run_nft_delete(runner) {
             cleanup_error = Some(err);
         } else {
             clear_nft_live(paths);
@@ -2170,6 +2173,55 @@ mod tests {
         };
         execute_plan(&next, &mut fail(), &mut RecordedSignals::default(), &paths).unwrap_err();
         execute_plan(&next, &mut fail(), &mut RecordedSignals::default(), &paths).unwrap_err();
+        let text = std::fs::read_to_string(paths.nft_path()).unwrap();
+        assert!(text.contains("oifname \"eth0\""));
+        assert!(!text.contains("eth1"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_failed_reapply_before_nft_keeps_the_live_rules_file() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        let mut changed = sample_profile();
+        changed.upstream_interface = "eth1".to_string();
+        let next = plan_apply(BackendKind::Direct, &changed, &paths).unwrap();
+        execute_plan(
+            &next,
+            &mut ScriptedRunner::with_results(vec![Err("ip failed".to_string())]),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap_err();
+        let early = std::fs::read_to_string(paths.nft_path()).unwrap();
+        assert!(early.contains("oifname \"eth0\""));
+        assert!(!early.contains("eth1"));
+        execute_plan(
+            &next,
+            &mut ScriptedRunner::with_results(vec![
+                Ok(String::new()),
+                Ok(String::new()),
+                Ok(String::new()),
+                Err("dnsmasq failed".to_string()),
+            ]),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap_err();
         let text = std::fs::read_to_string(paths.nft_path()).unwrap();
         assert!(text.contains("oifname \"eth0\""));
         assert!(!text.contains("eth1"));
