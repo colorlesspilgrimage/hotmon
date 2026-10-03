@@ -232,6 +232,7 @@ impl App {
             self.notice = err.clone();
             return Err(err);
         }
+        backend::clear_nft_live(paths);
         if let Err(err) = backend::restore_forwarding(paths) {
             self.notice = err.clone();
             return Err(err);

@@ -143,6 +143,14 @@ impl Paths {
     pub fn forwarding_record(&self) -> PathBuf {
         self.state_dir.join("forwarding.restore")
     }
+
+    pub fn nft_live_marker(&self) -> PathBuf {
+        self.state_dir.join("nft.live")
+    }
+}
+
+pub fn clear_nft_live(paths: &Paths) {
+    let _ = fs::remove_file(paths.nft_live_marker());
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -552,6 +560,21 @@ pub fn execute_plan(
             Ok(_) => {
                 if command.program == "nft" && !command.args.iter().any(|arg| arg == "delete") {
                     nft_installed = true;
+                    if let Err(message) = write_text(&paths.nft_live_marker(), "1\n", 0o600) {
+                        let err = format!(
+                            "The backend rejected the setting. nft failed: {message}"
+                        );
+                        return fail_start(
+                            err,
+                            &installed,
+                            runner,
+                            signals,
+                            paths,
+                            &started,
+                            nft_installed,
+                            forwarding_set,
+                        );
+                    }
                 }
                 note_started(command, &mut started);
             }
@@ -628,10 +651,17 @@ fn rollback(
             let restore = PlannedCommand::new("nft", ["-f", previous.to_string_lossy().as_ref()]);
             if let Err(err) = runner.run(&restore) {
                 cleanup_error = Some(format!("The firewall did not stop. {err}"));
+            } else if let Err(err) = fs::copy(previous, paths.nft_path()) {
+                cleanup_error = Some(format!(
+                    "The program cannot restore {}. {err}",
+                    paths.nft_path().display()
+                ));
             }
             let _ = fs::remove_file(previous);
         } else if let Err(err) = run_nft_delete(runner) {
             cleanup_error = Some(err);
+        } else {
+            clear_nft_live(paths);
         }
     }
     if let Err(err) = stop_started(signals, started) {
@@ -823,7 +853,10 @@ fn install_files_into(
                 })?;
             }
         }
-        if file.path == paths.nft_path() && file.path.is_file() {
+        if file.path == paths.nft_path()
+            && paths.nft_live_marker().is_file()
+            && file.path.is_file()
+        {
             let previous = paths.state_dir.join("hotmon.nft.previous");
             copy_private(&file.path, &previous)?;
             installed.previous_nft = Some(previous);
@@ -2056,6 +2089,90 @@ mod tests {
                     .iter()
                     .any(|arg| arg.ends_with("hotmon.nft.previous"))
         }));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_failed_start_after_stop_deletes_the_firewall_table() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        run_nft_delete(&mut ScriptedRunner::default()).unwrap();
+        clear_nft_live(&paths);
+        let mut runner = ScriptedRunner::with_results(vec![
+            Ok(String::new()),
+            Ok(String::new()),
+            Ok(String::new()),
+            Err("dnsmasq failed".to_string()),
+        ]);
+        let error = execute_plan(
+            &plan,
+            &mut runner,
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap_err();
+        assert!(error.contains("dnsmasq"));
+        assert!(runner.calls.iter().any(|command| {
+            command.program == "nft" && command.args.iter().any(|arg| arg == "delete")
+        }));
+        assert!(!runner.calls.iter().any(|command| {
+            command
+                .args
+                .iter()
+                .any(|arg| arg.ends_with("hotmon.nft.previous"))
+        }));
+        assert!(!paths.nft_live_marker().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
+    }
+
+    #[test]
+    fn a_second_failed_reapply_reloads_the_live_rules() {
+        let dir = scratch_dir();
+        let paths = Paths {
+            state_dir: dir.join("run"),
+            hostapd_config: dir.join("hostapd.conf"),
+            iwd_ap_dir: dir.join("iwd"),
+            proc_root: dir.join("proc"),
+        };
+        let plan = plan_apply(BackendKind::Direct, &sample_profile(), &paths).unwrap();
+        execute_plan(
+            &plan,
+            &mut ScriptedRunner::default(),
+            &mut RecordedSignals::default(),
+            &paths,
+        )
+        .unwrap();
+        let mut changed = sample_profile();
+        changed.upstream_interface = "eth1".to_string();
+        let next = plan_apply(BackendKind::Direct, &changed, &paths).unwrap();
+        let fail = || {
+            ScriptedRunner::with_results(vec![
+                Ok(String::new()),
+                Ok(String::new()),
+                Ok(String::new()),
+                Err("dnsmasq failed".to_string()),
+            ])
+        };
+        execute_plan(&next, &mut fail(), &mut RecordedSignals::default(), &paths).unwrap_err();
+        execute_plan(&next, &mut fail(), &mut RecordedSignals::default(), &paths).unwrap_err();
+        let text = std::fs::read_to_string(paths.nft_path()).unwrap();
+        assert!(text.contains("oifname \"eth0\""));
+        assert!(!text.contains("eth1"));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(paths.dnsmasq_dir());
     }
