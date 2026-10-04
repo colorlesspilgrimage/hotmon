@@ -1,4 +1,5 @@
 #include "process.hpp"
+#include "text.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -11,11 +12,6 @@
 #include <utility>
 
 namespace hotmon {
-namespace {
-
-std::string errno_text(int err) { return std::strerror(err); }
-
-}  // namespace
 
 FileDescriptor::FileDescriptor(int fd) : fd_(fd) {}
 

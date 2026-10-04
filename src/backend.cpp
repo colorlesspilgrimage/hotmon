@@ -3,18 +3,11 @@
 
 #include "backend_text.hpp"
 #include "process.hpp"
-
-#include <cctype>
+#include "text.hpp"
 
 namespace hotmon {
 namespace {
 
-std::string ascii_lower(std::string text) {
-  for (char& ch : text) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  }
-  return text;
-}
 
 PlanFile plain_file(std::filesystem::path path, std::string contents, uint32_t mode) {
   PlanFile file;

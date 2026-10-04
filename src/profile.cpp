@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include "profile.hpp"
+#include "text.hpp"
 
 #include <yyjson.h>
 
@@ -21,37 +22,6 @@ Result<std::string> profile_to_json(const Profile& profile);
 Result<Profile> profile_from_json(std::string_view text);
 namespace {
 
-std::string errno_text() { return std::strerror(errno); }
-
-std::string trim_copy(std::string_view text) {
-  size_t begin = 0;
-  while (begin < text.size() &&
-         std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
-    ++begin;
-  }
-  size_t end = text.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-    --end;
-  }
-  return std::string(text.substr(begin, end - begin));
-}
-
-std::string ascii_lower(std::string text) {
-  for (char& ch : text) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  }
-  return text;
-}
-
-uint32_t prefix_mask(uint8_t prefix) {
-  if (prefix == 0) {
-    return 0;
-  }
-  if (prefix >= 32) {
-    return 0xFFFFFFFFU;
-  }
-  return 0xFFFFFFFFU << (32 - prefix);
-}
 
 bool is_unicode_control(char32_t code) {
   return code <= 0x1F || (code >= 0x7F && code <= 0x9F);

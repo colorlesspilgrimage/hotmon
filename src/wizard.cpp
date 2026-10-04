@@ -1,6 +1,6 @@
 #include "wizard.hpp"
 
-#include <cctype>
+#include "text.hpp"
 #include <tuple>
 
 #include <algorithm>
@@ -8,17 +8,6 @@
 namespace hotmon {
 namespace {
 
-std::string trim_copy(std::string_view text) {
-  size_t begin = 0;
-  while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
-    ++begin;
-  }
-  size_t end = text.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-    --end;
-  }
-  return std::string(text.substr(begin, end - begin));
-}
 
 SelectBox security_box(std::string_view selected = "wpa2") {
   SelectBox box({{"Open", "open"}, {"WPA2", "wpa2"}, {"WPA3", "wpa3"}}, 1);
@@ -68,6 +57,27 @@ void add_if_missing(SelectBox& box, std::string label, std::string value) {
     box.add(Choice{std::move(label), value});
     box.select_value(value);
   }
+}
+
+std::string* typed_field(Wizard& wizard) {
+  if (wizard.page == Page::Ssid) {
+    return &wizard.ssid;
+  }
+  if (wizard.page == Page::Passphrase) {
+    return &wizard.passphrase;
+  }
+  if (wizard.page == Page::Advanced) {
+    if (wizard.field == 2) {
+      return &wizard.adv_address_cidr;
+    }
+    if (wizard.field == 4) {
+      return &wizard.adv_dhcp_start;
+    }
+    if (wizard.field == 5) {
+      return &wizard.adv_dhcp_end;
+    }
+  }
+  return nullptr;
 }
 
 }  // namespace
@@ -388,20 +398,7 @@ void Wizard::push_char(char32_t ch) {
     return;
   }
   cancelled = false;
-  std::string* target = nullptr;
-  if (page == Page::Ssid) {
-    target = &ssid;
-  } else if (page == Page::Passphrase) {
-    target = &passphrase;
-  } else if (page == Page::Advanced) {
-    if (field == 2) {
-      target = &adv_address_cidr;
-    } else if (field == 4) {
-      target = &adv_dhcp_start;
-    } else if (field == 5) {
-      target = &adv_dhcp_end;
-    }
-  }
+  std::string* target = typed_field(*this);
   if (target == nullptr || target->size() >= 128) {
     return;
   }
@@ -412,20 +409,7 @@ void Wizard::push_char(char32_t ch) {
 
 void Wizard::backspace() {
   cancelled = false;
-  std::string* target = nullptr;
-  if (page == Page::Ssid) {
-    target = &ssid;
-  } else if (page == Page::Passphrase) {
-    target = &passphrase;
-  } else if (page == Page::Advanced) {
-    if (field == 2) {
-      target = &adv_address_cidr;
-    } else if (field == 4) {
-      target = &adv_dhcp_start;
-    } else if (field == 5) {
-      target = &adv_dhcp_end;
-    }
-  }
+  std::string* target = typed_field(*this);
   if (target != nullptr && !target->empty()) {
     target->pop_back();
   }

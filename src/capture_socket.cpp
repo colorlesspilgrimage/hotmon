@@ -1,9 +1,9 @@
 #include "capture_socket.hpp"
 
 #include "iface.hpp"
+#include "text.hpp"
 
 #include <cerrno>
-#include <cstring>
 
 #include <arpa/inet.h>
 #include <linux/if_ether.h>
@@ -41,12 +41,12 @@ Result<LocalCapture> LocalCapture::open(std::string_view interface) {
   }
   const int fd = ::socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
   if (fd < 0) {
-    return unexpected_text(std::strerror(errno));
+    return unexpected_text(errno_text());
   }
   const std::string name(interface);
   const unsigned int index = if_nametoindex(name.c_str());
   if (index == 0) {
-    const std::string message = std::strerror(errno);
+    const std::string message = errno_text();
     ::close(fd);
     return unexpected_text(message);
   }
@@ -55,7 +55,7 @@ Result<LocalCapture> LocalCapture::open(std::string_view interface) {
   address.sll_protocol = htons(ETH_P_ALL);
   address.sll_ifindex = static_cast<int>(index);
   if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-    const std::string message = std::strerror(errno);
+    const std::string message = errno_text();
     ::close(fd);
     return unexpected_text(message);
   }
@@ -68,7 +68,7 @@ Result<std::optional<std::vector<uint8_t>>> LocalCapture::try_recv() {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return std::optional<std::vector<uint8_t>>();
     }
-    return unexpected_text(std::strerror(errno));
+    return unexpected_text(errno_text());
   }
   return std::optional<std::vector<uint8_t>>(
       std::vector<uint8_t>(buffer_.begin(), buffer_.begin() + size));
