@@ -83,6 +83,14 @@ Result<CommandOutput> run_capture(const std::vector<std::string>& argv) {
     err_read = FileDescriptor();
     err_write = FileDescriptor();
     status_read = FileDescriptor();
+    // Do not give open descriptors of hotmon (for example the capture socket) to the child.
+    // The status pipe also closes at exec, so a failed exec can still report.
+    if (::close_range(3, ~0U, CLOSE_RANGE_CLOEXEC) != 0) {
+      const long limit = ::sysconf(_SC_OPEN_MAX);
+      for (int fd = 3; fd < (limit > 0 ? limit : 1024); ++fd) {
+        ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+      }
+    }
     std::vector<char*> args;
     args.reserve(argv.size() + 1);
     for (const std::string& arg : argv) {

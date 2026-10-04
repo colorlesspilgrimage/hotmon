@@ -55,28 +55,41 @@ bool is_unicode_control(char32_t code) {
   return code <= 0x1F || (code >= 0x7F && code <= 0x9F);
 }
 
+// Decode strict UTF-8. Reject malformed bytes, because they can hide a newline or a slash.
 bool has_disallowed_ssid_char(std::string_view ssid) {
   for (size_t index = 0; index < ssid.size();) {
     const unsigned char byte = static_cast<unsigned char>(ssid[index]);
     char32_t code = 0;
     size_t width = 1;
+    char32_t minimum = 0;
     if (byte < 0x80) {
       code = byte;
-    } else if ((byte & 0xE0) == 0xC0 && index + 1 < ssid.size()) {
-      code = (byte & 0x1F) << 6 | (static_cast<unsigned char>(ssid[index + 1]) & 0x3F);
+    } else if ((byte & 0xE0) == 0xC0) {
+      code = byte & 0x1F;
       width = 2;
-    } else if ((byte & 0xF0) == 0xE0 && index + 2 < ssid.size()) {
-      code = (byte & 0x0F) << 12 |
-             (static_cast<unsigned char>(ssid[index + 1]) & 0x3F) << 6 |
-             (static_cast<unsigned char>(ssid[index + 2]) & 0x3F);
+      minimum = 0x80;
+    } else if ((byte & 0xF0) == 0xE0) {
+      code = byte & 0x0F;
       width = 3;
-    } else if ((byte & 0xF8) == 0xF0 && index + 3 < ssid.size()) {
-      code = (byte & 0x07) << 18 |
-             (static_cast<unsigned char>(ssid[index + 1]) & 0x3F) << 12 |
-             (static_cast<unsigned char>(ssid[index + 2]) & 0x3F) << 6 |
-             (static_cast<unsigned char>(ssid[index + 3]) & 0x3F);
+      minimum = 0x800;
+    } else if ((byte & 0xF8) == 0xF0) {
+      code = byte & 0x07;
       width = 4;
+      minimum = 0x10000;
     } else {
+      return true;
+    }
+    if (index + width > ssid.size()) {
+      return true;
+    }
+    for (size_t next = 1; next < width; ++next) {
+      const unsigned char part = static_cast<unsigned char>(ssid[index + next]);
+      if ((part & 0xC0) != 0x80) {
+        return true;
+      }
+      code = (code << 6) | (part & 0x3F);
+    }
+    if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) {
       return true;
     }
     if (is_unicode_control(code) || code == '/') {
@@ -87,10 +100,26 @@ bool has_disallowed_ssid_char(std::string_view ssid) {
   return false;
 }
 
-Result<void> write_mode(const std::filesystem::path& path, std::string_view contents, mode_t mode) {
-  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, mode);
+// Write a file in an open folder. The program often runs as root, so it does not follow links.
+// It does not truncate a file that has a second hard link.
+Result<void> write_mode(int dir_fd, const std::filesystem::path& path, std::string_view contents,
+                        mode_t mode) {
+  const std::string name = path.filename().string();
+  const int fd = ::openat(dir_fd, name.c_str(),
+                          O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, mode);
   if (fd < 0) {
     return unexpected_text("The program cannot write " + path.string() + ". " + errno_text());
+  }
+  struct stat info {};
+  if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1) {
+    ::close(fd);
+    return unexpected_text("The program cannot write " + path.string() +
+                           ". The file is not a private regular file.");
+  }
+  if (::fchmod(fd, mode) != 0 || ::ftruncate(fd, 0) != 0) {
+    const std::string message = errno_text();
+    ::close(fd);
+    return unexpected_text("The program cannot protect " + path.string() + ". " + message);
   }
   size_t written = 0;
   while (written < contents.size()) {
@@ -101,11 +130,6 @@ Result<void> write_mode(const std::filesystem::path& path, std::string_view cont
       return unexpected_text("The program cannot write " + path.string() + ". " + message);
     }
     written += static_cast<size_t>(count);
-  }
-  if (::fchmod(fd, mode) != 0) {
-    const std::string message = errno_text();
-    ::close(fd);
-    return unexpected_text("The program cannot protect " + path.string() + ". " + message);
   }
   ::close(fd);
   return {};
@@ -570,26 +594,33 @@ std::filesystem::path default_profile_path() {
 }
 
 Result<void> save_profile(const std::filesystem::path& path, const Profile& profile) {
-  const std::filesystem::path parent = path.parent_path();
-  if (!parent.empty()) {
-    std::error_code error;
-    std::filesystem::create_directories(parent, error);
-    if (error) {
-      return unexpected_text("The program cannot prepare " + parent.string() + ". " +
-                             error.message());
-    }
-    std::filesystem::permissions(parent, std::filesystem::perms::owner_all,
-                                 std::filesystem::perm_options::replace, error);
-    if (error) {
-      return unexpected_text("The program cannot protect " + parent.string() + ". " +
-                             error.message());
-    }
-  }
   auto text = profile_to_json(profile);
   if (!text) {
     return unexpected_text(text.error());
   }
-  return write_mode(path, *text + "\n", 0600);
+  const std::filesystem::path parent = path.parent_path();
+  if (parent.empty()) {
+    return write_mode(AT_FDCWD, path, *text + "\n", 0600);
+  }
+  std::error_code error;
+  std::filesystem::create_directories(parent, error);
+  if (error) {
+    return unexpected_text("The program cannot prepare " + parent.string() + ". " +
+                           error.message());
+  }
+  // Do not follow a link at the last folder. A link can point to a system folder.
+  const int dir_fd = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (dir_fd < 0) {
+    return unexpected_text("The program cannot protect " + parent.string() + ". " + errno_text());
+  }
+  if (::fchmod(dir_fd, 0700) != 0) {
+    const std::string message = errno_text();
+    ::close(dir_fd);
+    return unexpected_text("The program cannot protect " + parent.string() + ". " + message);
+  }
+  auto written = write_mode(dir_fd, path, *text + "\n", 0600);
+  ::close(dir_fd);
+  return written;
 }
 
 Result<std::string> profile_to_json(const Profile& profile) {
