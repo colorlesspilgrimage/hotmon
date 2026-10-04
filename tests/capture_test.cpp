@@ -139,4 +139,4 @@ TEST(Capture, InvalidInterfaceDoesNotOpenASocket) {
   EXPECT_NE(bad.error().find("The capture interface name is not valid."), std::string::npos);
 }
 
-}  // namespace
+}

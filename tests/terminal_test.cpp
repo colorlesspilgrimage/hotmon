@@ -29,4 +29,4 @@ TEST(Terminal, SignalsEndTheProgram) {
   EXPECT_EQ(signal_after_handlers(SIGINT), SIGINT);
 }
 
-}  // namespace
+}

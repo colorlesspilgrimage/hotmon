@@ -38,4 +38,4 @@ TEST(SelectBox, TypedCharactersDoNotChangeTheSecurityBox) {
   EXPECT_EQ(wizard.security.current().value, "wpa2");
 }
 
-}  // namespace
+}

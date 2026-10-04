@@ -85,4 +85,4 @@ TEST(Monitor, HugeCountersDoNotWrapTheTotal) {
   EXPECT_EQ(state.clients()[1].graph.samples(), (std::vector<uint64_t>{0, max - 10}));
 }
 
-}  // namespace
+}

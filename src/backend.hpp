@@ -84,4 +84,4 @@ class Runner {
 
 Result<void> run_stop_commands(const std::vector<PlannedCommand>& commands, Runner& runner);
 
-}  // namespace hotmon
+}

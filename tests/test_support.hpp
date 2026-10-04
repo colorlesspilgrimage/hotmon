@@ -60,4 +60,4 @@ class FakeSource : public FrameSource {
   Result<std::optional<std::vector<uint8_t>>> try_recv() override;
 };
 
-}  // namespace hotmon
+}

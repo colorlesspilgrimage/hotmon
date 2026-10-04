@@ -357,4 +357,4 @@ TEST(App, FailedReapplyKeepsThePrivateHostapdStopPath) {
   std::filesystem::remove_all(dir);
 }
 
-}  // namespace
+}

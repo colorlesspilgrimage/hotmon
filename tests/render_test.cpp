@@ -144,4 +144,4 @@ TEST(Render, WrapKeepsMultibyteCharactersWhole) {
   EXPECT_EQ(notice_rows, 3u);
 }
 
-}  // namespace
+}

@@ -119,4 +119,4 @@ TEST(Security, DnsmasqLeaseFileIsNotWorldWritable) {
   std::filesystem::remove_all(dir);
 }
 
-}  // namespace
+}

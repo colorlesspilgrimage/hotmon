@@ -116,4 +116,4 @@ std::string iwd_profile(const Profile& profile) {
   return text;
 }
 
-}  // namespace hotmon
+}

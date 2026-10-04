@@ -113,4 +113,4 @@ struct Wizard {
   Result<Profile> confirmed_profile(const HostFacts& facts);
 };
 
-}  // namespace hotmon
+}

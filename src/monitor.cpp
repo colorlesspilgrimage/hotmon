@@ -79,7 +79,7 @@ uint64_t saturating_add(uint64_t left, uint64_t right) {
              : left + right;
 }
 
-}  // namespace
+}
 
 Series::Series(size_t capacity) : capacity_(capacity) {}
 
@@ -222,4 +222,4 @@ std::vector<ClientSnapshot> clients_from_text(std::string_view dump, std::string
   return clients;
 }
 
-}  // namespace hotmon
+}

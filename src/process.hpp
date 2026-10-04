@@ -34,4 +34,4 @@ struct CommandOutput {
 
 Result<CommandOutput> run_capture(const std::vector<std::string>& argv);
 
-}  // namespace hotmon
+}

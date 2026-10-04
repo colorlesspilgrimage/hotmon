@@ -50,4 +50,4 @@ bool SelectBox::empty() const { return choices_.empty(); }
 
 void SelectBox::add(Choice choice) { choices_.push_back(std::move(choice)); }
 
-}  // namespace hotmon
+}

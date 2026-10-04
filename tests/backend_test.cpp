@@ -648,4 +648,4 @@ TEST(Backend, PidFileMustHoldOnlyOnePid) {
   std::filesystem::remove_all(dir);
 }
 
-}  // namespace
+}

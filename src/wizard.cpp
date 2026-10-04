@@ -117,7 +117,7 @@ void append_utf8(std::string& text, char32_t ch) {
   }
 }
 
-}  // namespace
+}
 
 const char* page_title(Page page) {
   switch (page) {
@@ -776,4 +776,4 @@ Result<Profile> Wizard::fail_profile(std::string message) {
   return unexpected_text(std::move(message));
 }
 
-}  // namespace hotmon
+}

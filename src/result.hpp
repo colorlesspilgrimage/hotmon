@@ -13,4 +13,4 @@ inline auto unexpected_text(std::string text) {
   return std::unexpected(std::move(text));
 }
 
-}  // namespace hotmon
+}

@@ -58,7 +58,7 @@ Ipv4Range make_range(int a, int b, int c) {
   return Ipv4Range{ipv4_host(a, b, c, 0), 24};
 }
 
-}  // namespace
+}
 
 uint32_t ipv4_host(int a, int b, int c, int d) {
   return (static_cast<uint32_t>(a) << 24) | (static_cast<uint32_t>(b) << 16) |
@@ -184,4 +184,4 @@ AutoRadio choose_radio(const IfaceInfo& ap, bool increased_compatibility) {
   return AutoRadio{Band::Band24, 6, true};
 }
 
-}  // namespace hotmon
+}

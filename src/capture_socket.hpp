@@ -25,4 +25,4 @@ class LocalCapture : public FrameSource {
   std::array<uint8_t, 65535> buffer_{};
 };
 
-}  // namespace hotmon
+}

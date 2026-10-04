@@ -136,4 +136,4 @@ TEST(Netauto, DhcpRangeNeverContainsTheGateway) {
   }
 }
 
-}  // namespace
+}

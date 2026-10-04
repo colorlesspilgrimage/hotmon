@@ -394,4 +394,4 @@ Result<std::string> App::hotspot_iface() const {
   return active->ap_interface;
 }
 
-}  // namespace hotmon
+}

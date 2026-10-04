@@ -95,4 +95,4 @@ TEST(Iface, CandidatesSplitApAndUpstream) {
   EXPECT_EQ(upstream[1].name, "wlan1");
 }
 
-}  // namespace
+}

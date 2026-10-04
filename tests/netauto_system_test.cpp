@@ -8,4 +8,4 @@ TEST(NetautoSystem, ReadLocalNetworksDoesNotThrow) {
   EXPECT_NO_THROW((void)hotmon::read_local_networks(""));
 }
 
-}  // namespace
+}

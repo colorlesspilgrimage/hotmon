@@ -255,7 +255,7 @@ std::vector<std::string> monitor_lines(const App& app, int width) {
   return lines;
 }
 
-}  // namespace
+}
 
 std::string sparkline_text(const std::vector<uint64_t>& samples, int width) {
   static const char* bars[] = {"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"};
@@ -311,4 +311,4 @@ std::vector<std::string> render(const App& app, int width, int height) {
   return lines;
 }
 
-}  // namespace hotmon
+}

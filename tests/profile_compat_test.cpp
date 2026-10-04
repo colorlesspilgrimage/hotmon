@@ -95,4 +95,4 @@ TEST(ProfileCompat, EscapedNulIsNotCutOff) {
   std::filesystem::remove_all(dir);
 }
 
-}  // namespace
+}

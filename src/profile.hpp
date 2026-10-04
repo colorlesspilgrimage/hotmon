@@ -84,4 +84,4 @@ Result<void> save_profile(const std::filesystem::path& path, const Profile& prof
 Result<Profile> load_profile(const std::filesystem::path& path);
 Result<std::optional<Profile>> load_optional(const std::filesystem::path& path);
 
-}  // namespace hotmon
+}

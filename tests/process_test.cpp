@@ -26,4 +26,4 @@ TEST(Process, MissingProgramReturnsAnError) {
   EXPECT_FALSE(run_capture({"definitely-not-a-program"}));
 }
 
-}  // namespace
+}

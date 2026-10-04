@@ -12,4 +12,4 @@ std::string hostapd_conf_text(const Profile& profile);
 std::string dnsmasq_conf_text(const Profile& profile);
 std::string nft_text(const Profile& profile);
 
-}  // namespace hotmon
+}

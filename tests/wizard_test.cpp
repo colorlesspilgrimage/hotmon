@@ -467,4 +467,4 @@ TEST(Wizard, TypedFieldLimitCountsCharacters) {
   EXPECT_EQ(wizard.ssid.size(), 256u);
 }
 
-}  // namespace
+}

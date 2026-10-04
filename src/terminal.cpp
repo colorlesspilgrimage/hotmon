@@ -99,7 +99,7 @@ void open_capture(App& app) {
   }
 }
 
-}  // namespace
+}
 
 void install_signal_handlers() {
   ::signal(SIGTERM, on_signal);
@@ -201,4 +201,4 @@ int run_ui(App& app) {
   }
 }
 
-}  // namespace hotmon
+}
