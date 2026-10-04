@@ -1,55 +1,75 @@
 # hotmon
 
-hotmon is a text interface for a Wi-Fi hotspot on Linux.
-The program configures the hotspot.
-The program manages the hotspot.
-The program monitors traffic on the hotspot.
-The program stores a profile on disk.
-The program loads that profile on the next start.
+hotmon is a terminal program for running a Wi-Fi hotspot on Linux. You set the hotspot up in a short wizard, start it, and watch the traffic on it. It is written in C++23.
+
+## What it does
+
+- Walks you through the settings: which Wi-Fi interface to use, the network name (SSID), the security mode, the passphrase, and an optional upstream interface for internet access.
+- Picks the band, channel, address range and DHCP range for you. You can change them on an advanced page if you want to.
+- Starts and stops the hotspot using whatever your system already has.
+- Shows status and live traffic counters for the hotspot interface.
+- Can capture packets on the hotspot interface.
+- Saves your settings so the next run starts from them.
 
 ## Build
 
-Install cmake, gtest, yyjson, ncurses, and pkgconf.
-Run these commands in the repository:
+You need a C++23 compiler, CMake 3.20 or newer, ncurses (wide-character build), yyjson, GoogleTest and pkgconf.
 
 ```
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-The program file is `build/hotmon`.
-The wizard works without root.
-Use root to start the hotspot:
+The program ends up at `build/hotmon`.
+
+## Run
 
 ```
 sudo build/hotmon
 ```
 
-## Wizard
+The wizard works without root, so you can look around as a normal user. Starting the hotspot needs root or the `CAP_NET_ADMIN` capability.
 
-The wizard picks the band, the channel, the address range, and the DHCP range.
-The default band is 5 GHz on channel 36.
-Increased compatibility uses 2.4 GHz on channel 6.
-Press `a` on the network page to open advanced setup.
-Advanced setup is optional.
-The user does not type the security mode, the band, or the channel.
+## The wizard
 
-## Privilege requirements
+You move through these pages: interface, SSID, security, passphrase, upstream, band and channel, address and DHCP, then a review page.
 
-The program needs root, or the CAP_NET_ADMIN capability, to start the hotspot.
-The program needs root, or the CAP_NET_ADMIN capability, to stop the hotspot.
-Packet capture needs root, or the CAP_NET_RAW capability.
-The program captures frames only on the hotspot interface.
-The program does not change packet contents.
-The program starts capture only after a second confirmation.
+- Security is a pick list: Open, WPA2 or WPA3. The default is WPA2.
+- A passphrase must be 8 to 63 printable ASCII characters. Leave it empty for an open network.
+- The default band is 5 GHz on channel 36. The compatibility choice is 2.4 GHz on channel 6.
+- On the address page, press `a` to open the advanced settings. Press `d` to go back to the automatic ones.
+- The upstream page starts on None. If you choose an open network and also share an upstream connection, hotmon warns you and asks for a second confirmation before it applies anything.
 
-## Supported backends
+## Keys while the hotspot is running
 
-The program detects one backend.
-The user does not select the backend.
+| Key | Action |
+| --- | --- |
+| `m` | Show the traffic monitor |
+| `s` or `Esc` | Go back to the status view |
+| `w` | Reopen the wizard |
+| `c` | Start a packet capture (asks you to confirm first) |
+| `z` | Stop the capture |
+| `k` | Stop the hotspot |
+| `q` | Quit |
 
-- The program uses NetworkManager when the NetworkManager service is active.
-- The program uses iwd when NetworkManager is not active and the iwd service is active.
-- The program uses an existing hostapd setup when NetworkManager and iwd are not active and hostapd is already set up.
-- The program uses hostapd, dnsmasq, and nftables when no manager is active.
+## Packet capture
+
+Capture needs root or the `CAP_NET_RAW` capability. It only reads frames on the hotspot interface and never changes them. Pressing `c` shows a warning, and capture starts only after you press Enter to confirm.
+
+## Backends
+
+hotmon picks the backend itself. You do not choose one. It checks in this order and uses the first match:
+
+1. NetworkManager, if its service is active.
+2. iwd, if its service is active.
+3. An existing hostapd setup, if hostapd is already configured (`/etc/hostapd/hostapd.conf`).
+4. hostapd with dnsmasq and nftables, if nothing else is managing Wi-Fi.
+
+## Saved settings
+
+Settings are stored in `$XDG_CONFIG_HOME/hotmon/profile.json`, or `~/.config/hotmon/profile.json` if that variable is not set. The file includes the passphrase in plain text, so hotmon restricts it to its owner. Do not copy it somewhere public.
+
+## Roadmap
+
+See `ROADMAP.md`.
