@@ -1,6 +1,6 @@
 #include "wizard.hpp"
 
-#include <cctype>
+#include "text.hpp"
 #include <tuple>
 
 #include <algorithm>
@@ -8,17 +8,6 @@
 namespace hotmon {
 namespace {
 
-std::string trim_copy(std::string_view text) {
-  size_t begin = 0;
-  while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
-    ++begin;
-  }
-  size_t end = text.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-    --end;
-  }
-  return std::string(text.substr(begin, end - begin));
-}
 
 SelectBox security_box(std::string_view selected = "wpa2") {
   SelectBox box({{"Open", "open"}, {"WPA2", "wpa2"}, {"WPA3", "wpa3"}}, 1);
@@ -70,25 +59,23 @@ void add_if_missing(SelectBox& box, std::string label, std::string value) {
   }
 }
 
-std::string* typed_target(Page page, size_t field, std::string& ssid, std::string& passphrase,
-                          std::string& address, std::string& start, std::string& end) {
-  if (page == Page::Ssid) {
-    return &ssid;
+std::string* typed_field(Wizard& wizard) {
+  if (wizard.page == Page::Ssid) {
+    return &wizard.ssid;
   }
-  if (page == Page::Passphrase) {
-    return &passphrase;
+  if (wizard.page == Page::Passphrase) {
+    return &wizard.passphrase;
   }
-  if (page != Page::Advanced) {
-    return nullptr;
-  }
-  if (field == 2) {
-    return &address;
-  }
-  if (field == 4) {
-    return &start;
-  }
-  if (field == 5) {
-    return &end;
+  if (wizard.page == Page::Advanced) {
+    if (wizard.field == 2) {
+      return &wizard.adv_address_cidr;
+    }
+    if (wizard.field == 4) {
+      return &wizard.adv_dhcp_start;
+    }
+    if (wizard.field == 5) {
+      return &wizard.adv_dhcp_end;
+    }
   }
   return nullptr;
 }
@@ -436,8 +423,7 @@ void Wizard::push_char(char32_t ch) {
     return;
   }
   cancelled = false;
-  std::string* target = typed_target(page, field, ssid, passphrase, adv_address_cidr,
-                                     adv_dhcp_start, adv_dhcp_end);
+  std::string* target = typed_field(*this);
   if (target == nullptr || char_count(*target) >= 128) {
     return;
   }
@@ -446,8 +432,7 @@ void Wizard::push_char(char32_t ch) {
 
 void Wizard::backspace() {
   cancelled = false;
-  std::string* target = typed_target(page, field, ssid, passphrase, adv_address_cidr,
-                                     adv_dhcp_start, adv_dhcp_end);
+  std::string* target = typed_field(*this);
   if (target == nullptr) {
     return;
   }

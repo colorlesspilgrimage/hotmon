@@ -2,25 +2,14 @@
 
 #include "process.hpp"
 #include "profile.hpp"
+#include "text.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <filesystem>
 
 namespace hotmon {
 namespace {
 
-std::string trim_copy(std::string_view text) {
-  size_t begin = 0;
-  while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
-    ++begin;
-  }
-  size_t end = text.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-    --end;
-  }
-  return std::string(text.substr(begin, end - begin));
-}
 
 bool parse_channel_line(std::string_view line, double& frequency, int& channel) {
   const size_t mhz = line.find("MHz");
@@ -73,21 +62,16 @@ bool valid_name(std::string_view name) {
 }
 
 bool modes_support_ap(std::string_view text) {
-  size_t start = 0;
-  while (start <= text.size()) {
-    const size_t end = text.find('\n', start);
-    const std::string line = trim_copy(text.substr(start, end == std::string_view::npos
-                                                              ? std::string_view::npos
-                                                              : end - start));
+  bool found = false;
+  for_each_line(text, [&](std::string_view raw) {
+    const std::string line = trim_copy(raw);
     if (line == "* AP" || line == "AP") {
-      return true;
+      found = true;
+      return false;
     }
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
-  return false;
+    return true;
+  });
+  return found;
 }
 
 Result<void> require_ap(const IfaceInfo& info) {
@@ -104,11 +88,7 @@ PhyCaps parse_phy_info(std::string_view text) {
   PhyCaps caps;
   caps.supports_ap = modes_support_ap(text);
   bool in_frequencies = false;
-  size_t start = 0;
-  while (start <= text.size()) {
-    const size_t end = text.find('\n', start);
-    const std::string_view raw =
-        text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+  for_each_line(text, [&](std::string_view raw) {
     const std::string line = trim_copy(raw);
     if (line.find("Frequencies:") != std::string::npos) {
       in_frequencies = true;
@@ -131,11 +111,8 @@ PhyCaps parse_phy_info(std::string_view text) {
         }
       }
     }
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
+    return true;
+  });
   std::sort(caps.channels_24.begin(), caps.channels_24.end());
   std::sort(caps.channels_5.begin(), caps.channels_5.end());
   return caps;

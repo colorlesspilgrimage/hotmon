@@ -2,6 +2,7 @@
 
 #include "iface.hpp"
 #include "process.hpp"
+#include "text.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -11,7 +12,6 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <iterator>
@@ -20,19 +20,6 @@
 
 namespace hotmon {
 
-std::string errno_text() { return std::strerror(errno); }
-
-std::string trim_copy(std::string text) {
-  size_t begin = 0;
-  while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
-    ++begin;
-  }
-  size_t end = text.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-    --end;
-  }
-  return text.substr(begin, end - begin);
-}
 
 mode_t mode_of(uint32_t mode) { return static_cast<mode_t>(mode); }
 
@@ -144,7 +131,7 @@ Result<void> write_sysctl(const std::filesystem::path& path, std::string_view va
   const int err = errno;
   ::close(fd);
   if (count < 0) {
-    return unexpected_text("The program cannot write " + path.string() + ". " + std::strerror(err));
+    return unexpected_text("The program cannot write " + path.string() + ". " + errno_text(err));
   }
   return {};
 }
@@ -540,29 +527,31 @@ Result<void> restore_forwarding(const Paths& paths) {
     return unexpected_text("The forwarding record cannot be read. " + errno_text());
   }
   std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-  size_t start = 0;
-  while (start <= text.size()) {
-    const size_t end = text.find('\n', start);
-    const std::string line = text.substr(
-        start, end == std::string::npos ? std::string::npos : end - start);
-    if (!line.empty()) {
-      const size_t space = line.find(' ');
-      if (space == std::string::npos) {
-        return unexpected_text("The forwarding record is not valid.");
-      }
-      const std::string iface = line.substr(0, space);
-      const std::string value = line.substr(space + 1);
-      if (!valid_name(iface) || (value != "0" && value != "1")) {
-        return unexpected_text("The forwarding record is not valid.");
-      }
-      if (auto written = write_sysctl(forwarding_path(paths, iface), value + "\n"); !written) {
-        return written;
-      }
+  std::optional<std::string> failed;
+  for_each_line(text, [&](std::string_view raw) {
+    const std::string line(raw);
+    if (line.empty()) {
+      return true;
     }
-    if (end == std::string::npos) {
-      break;
+    const size_t space = line.find(' ');
+    if (space == std::string::npos) {
+      failed = "The forwarding record is not valid.";
+      return false;
     }
-    start = end + 1;
+    const std::string iface = line.substr(0, space);
+    const std::string value = line.substr(space + 1);
+    if (!valid_name(iface) || (value != "0" && value != "1")) {
+      failed = "The forwarding record is not valid.";
+      return false;
+    }
+    if (auto written = write_sysctl(forwarding_path(paths, iface), value + "\n"); !written) {
+      failed = written.error();
+      return false;
+    }
+    return true;
+  });
+  if (failed) {
+    return unexpected_text(*failed);
   }
   std::error_code error;
   std::filesystem::remove(record, error);

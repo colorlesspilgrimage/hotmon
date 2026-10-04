@@ -1,7 +1,8 @@
 #include <algorithm>
 #include "monitor.hpp"
 
-#include <cctype>
+#include "text.hpp"
+
 #include <set>
 #include <charconv>
 #include <limits>
@@ -11,24 +12,6 @@ namespace {
 
 constexpr size_t kGraphCapacity = 40;
 
-std::string trim_copy(std::string_view text) {
-  size_t begin = 0;
-  while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
-    ++begin;
-  }
-  size_t end = text.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-    --end;
-  }
-  return std::string(text.substr(begin, end - begin));
-}
-
-std::string ascii_lower(std::string text) {
-  for (char& ch : text) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  }
-  return text;
-}
 
 std::optional<std::string> value_after(std::string_view line, std::string_view label) {
   if (!line.starts_with(label)) {
@@ -37,24 +20,7 @@ std::optional<std::string> value_after(std::string_view line, std::string_view l
   return trim_copy(line.substr(label.size()));
 }
 
-std::vector<std::string> split_ws(std::string_view text) {
-  std::vector<std::string> parts;
-  size_t index = 0;
-  while (index < text.size()) {
-    while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) != 0) {
-      ++index;
-    }
-    if (index >= text.size()) {
-      break;
-    }
-    const size_t start = index;
-    while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) == 0) {
-      ++index;
-    }
-    parts.emplace_back(text.substr(start, index - start));
-  }
-  return parts;
-}
+
 
 uint64_t parse_counter(std::string_view text) {
   const auto parts = split_ws(text);
@@ -149,7 +115,6 @@ void MonitorState::clear() {
 std::vector<ClientSnapshot> parse_station_dump(std::string_view text) {
   std::vector<ClientSnapshot> clients;
   std::optional<ClientSnapshot> current;
-  size_t start = 0;
   auto push_line = [&](std::string_view raw) {
     const std::string trimmed = trim_copy(raw);
     if (trimmed.starts_with("Station ")) {
@@ -171,14 +136,10 @@ std::vector<ClientSnapshot> parse_station_dump(std::string_view text) {
       current->tx_bytes = parse_counter(*tx);
     }
   };
-  while (start <= text.size()) {
-    const size_t end = text.find('\n', start);
-    push_line(text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
+  for_each_line(text, [&](std::string_view line) {
+    push_line(line);
+    return true;
+  });
   if (current) {
     clients.push_back(*current);
   }
@@ -187,11 +148,7 @@ std::vector<ClientSnapshot> parse_station_dump(std::string_view text) {
 
 std::vector<std::pair<std::string, std::string>> parse_neigh(std::string_view text) {
   std::vector<std::pair<std::string, std::string>> pairs;
-  size_t start = 0;
-  while (start <= text.size()) {
-    const size_t end = text.find('\n', start);
-    const std::string_view line =
-        text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+  for_each_line(text, [&](std::string_view line) {
     const auto parts = split_ws(line);
     const auto position = std::find(parts.begin(), parts.end(), "lladdr");
     if (position != parts.end() && !parts.empty()) {
@@ -200,11 +157,8 @@ std::vector<std::pair<std::string, std::string>> parse_neigh(std::string_view te
         pairs.emplace_back(parts[0], ascii_lower(parts[index + 1]));
       }
     }
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
+    return true;
+  });
   return pairs;
 }
 

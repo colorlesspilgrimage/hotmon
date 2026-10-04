@@ -107,6 +107,24 @@ std::vector<std::string> wrap_text(const std::string& text, int width) {
   return lines;
 }
 
+void append_box(std::vector<std::string>& lines, const std::string& title,
+                const std::vector<std::string>& rows, int width, bool wrap) {
+  lines.push_back(box_top(title, width));
+  if (wrap) {
+    const int inner = std::max(width - 2, 0);
+    for (const std::string& line : rows) {
+      for (const std::string& part : wrap_text(line, inner)) {
+        lines.push_back(box_row(part, width));
+      }
+    }
+  } else {
+    for (const std::string& row : rows) {
+      lines.push_back(box_row(row, width));
+    }
+  }
+  lines.push_back(box_bottom(width));
+}
+
 std::string footer_text(const App& app) {
   if (app.view == View::Status) {
     return "m: monitor  c: capture  z: stop capture  k: stop hotspot  w: wizard  q: quit";
@@ -139,15 +157,8 @@ std::vector<std::string> header_lines(const App& app, int width) {
   }
   const std::string notice = app.notice.empty() && app.wizard.error ? *app.wizard.error : app.notice;
   std::vector<std::string> lines;
-  lines.push_back(box_top("hotmon", width));
-  for (const std::string& part :
-       wrap_text("hotmon  " + std::string(view) + "  " + label(app.backend), std::max(width - 2, 0))) {
-    lines.push_back(box_row(part, width));
-  }
-  for (const std::string& part : wrap_text(notice, std::max(width - 2, 0))) {
-    lines.push_back(box_row(part, width));
-  }
-  lines.push_back(box_bottom(width));
+  append_box(lines, "hotmon",
+             {"hotmon  " + std::string(view) + "  " + label(app.backend), notice}, width, true);
   return lines;
 }
 
@@ -176,13 +187,7 @@ std::vector<std::string> wizard_lines(const App& app, int width) {
     }
   }
   std::vector<std::string> lines;
-  lines.push_back(box_top(page_title(app.wizard.page), width));
-  for (const std::string& line : body) {
-    for (const std::string& part : wrap_text(line, std::max(width - 2, 0))) {
-      lines.push_back(box_row(part, width));
-    }
-  }
-  lines.push_back(box_bottom(width));
+  append_box(lines, page_title(app.wizard.page), body, width, true);
   return lines;
 }
 
@@ -209,46 +214,34 @@ std::vector<std::string> status_lines(const App& app, int width) {
     }
   }
   std::vector<std::string> lines;
-  lines.push_back(box_top("Status", width));
-  for (const std::string& line : body) {
-    for (const std::string& part : wrap_text(line, std::max(width - 2, 0))) {
-      lines.push_back(box_row(part, width));
-    }
-  }
-  lines.push_back(box_bottom(width));
+  append_box(lines, "Status", body, width, true);
   return lines;
 }
 
 std::vector<std::string> monitor_lines(const App& app, int width) {
   std::vector<std::string> lines;
-  lines.push_back(box_top("Total traffic", width));
-  lines.push_back(box_row(sparkline_text(app.monitor.total_samples(), std::max(width - 2, 1)), width));
-  lines.push_back(box_bottom(width));
-  lines.push_back(box_top("Packets", width));
-  lines.push_back(box_row(app.capture.is_running() ? "Capture is active." : "Capture is stopped.", width));
-  const auto packets = app.capture.recent_lines(4);
-  if (packets.empty()) {
-    lines.push_back(box_row("No packets.", width));
+  append_box(lines, "Total traffic",
+             {sparkline_text(app.monitor.total_samples(), std::max(width - 2, 1))}, width, false);
+  std::vector<std::string> packets = {
+      app.capture.is_running() ? "Capture is active." : "Capture is stopped."};
+  const auto recent = app.capture.recent_lines(4);
+  if (recent.empty()) {
+    packets.emplace_back("No packets.");
   } else {
-    for (const std::string& line : packets) {
-      lines.push_back(box_row(line, width));
-    }
+    packets.insert(packets.end(), recent.begin(), recent.end());
   }
-  lines.push_back(box_bottom(width));
+  append_box(lines, "Packets", packets, width, false);
   const auto clients = app.monitor.clients();
   const size_t shown = std::min<size_t>(clients.size(), 4);
   for (size_t index = 0; index < shown; ++index) {
     const auto& client = clients[index];
-    lines.push_back(box_top(client.mac + " rx " + std::to_string(client.rx_bytes) + " tx " +
-                                std::to_string(client.tx_bytes),
-                            width));
-    lines.push_back(box_row(sparkline_text(client.graph.samples(), std::max(width - 2, 1)), width));
-    lines.push_back(box_bottom(width));
+    append_box(lines,
+               client.mac + " rx " + std::to_string(client.rx_bytes) + " tx " +
+                   std::to_string(client.tx_bytes),
+               {sparkline_text(client.graph.samples(), std::max(width - 2, 1))}, width, false);
   }
   if (clients.empty()) {
-    lines.push_back(box_top("Devices", width));
-    lines.push_back(box_row("No devices are connected.", width));
-    lines.push_back(box_bottom(width));
+    append_box(lines, "Devices", {"No devices are connected."}, width, false);
   } else if (clients.size() > shown) {
     lines.push_back(std::to_string(clients.size() - shown) + " more devices.");
   }

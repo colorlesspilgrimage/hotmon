@@ -1,6 +1,6 @@
 #include <algorithm>
-#include <cctype>
 #include "netauto.hpp"
+#include "text.hpp"
 
 #include <ifaddrs.h>
 #include <arpa/inet.h>
@@ -12,15 +12,6 @@
 namespace hotmon {
 namespace {
 
-uint32_t prefix_mask(uint8_t prefix) {
-  if (prefix == 0) {
-    return 0;
-  }
-  if (prefix >= 32) {
-    return 0xFFFFFFFFU;
-  }
-  return 0xFFFFFFFFU << (32 - prefix);
-}
 
 uint8_t prefix_of(uint32_t mask) {
   uint8_t bits = 0;
@@ -89,28 +80,8 @@ std::vector<Ipv4Range> candidate_networks() {
 
 std::vector<Ipv4Range> parse_proc_net_route(std::string_view text, std::string_view exclude_iface) {
   std::vector<Ipv4Range> ranges;
-  size_t start = 0;
-  while (start <= text.size()) {
-    const size_t end = text.find('\n', start);
-    const std::string_view line =
-        text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
-    std::vector<std::string> parts;
-    size_t index = 0;
-    while (index < line.size()) {
-      while (index < line.size() &&
-             std::isspace(static_cast<unsigned char>(line[index])) != 0) {
-        ++index;
-      }
-      if (index >= line.size()) {
-        break;
-      }
-      const size_t token = index;
-      while (index < line.size() &&
-             std::isspace(static_cast<unsigned char>(line[index])) == 0) {
-        ++index;
-      }
-      parts.emplace_back(line.substr(token, index - token));
-    }
+  for_each_line(text, [&](std::string_view line) {
+    const std::vector<std::string> parts = split_ws(line);
     if (parts.size() >= 8 && parts[0] != "Iface" && parts[0] != "lo" &&
         parts[0] != exclude_iface) {
       const uint32_t mask = ntohl(parse_hex(parts[7]));
@@ -119,11 +90,8 @@ std::vector<Ipv4Range> parse_proc_net_route(std::string_view text, std::string_v
         ranges.push_back(Ipv4Range{destination & mask, prefix_of(mask)});
       }
     }
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
+    return true;
+  });
   return ranges;
 }
 
