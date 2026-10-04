@@ -1,7 +1,5 @@
 #include <algorithm>
 #include <cctype>
-#include <fstream>
-#include <sstream>
 #include "profile.hpp"
 
 #include <yyjson.h>
@@ -117,17 +115,17 @@ std::string json_error(std::string detail) {
   return "The profile file is not valid. " + std::move(detail);
 }
 
-const char* string_field(yyjson_val* root, const char* key, std::string& error) {
+std::string string_field(yyjson_val* root, const char* key, std::string& error) {
   yyjson_val* value = yyjson_obj_get(root, key);
   if (value == nullptr) {
     error = json_error(std::string("missing field ") + key);
-    return nullptr;
+    return {};
   }
   if (!yyjson_is_str(value)) {
     error = json_error(std::string("field ") + key + " has the wrong type");
-    return nullptr;
+    return {};
   }
-  return yyjson_get_str(value);
+  return std::string(yyjson_get_str(value), yyjson_get_len(value));
 }
 
 }  // namespace
@@ -634,15 +632,15 @@ Result<Profile> profile_from_json(std::string_view text) {
     return unexpected_text(json_error("the root is not an object"));
   }
   std::string error;
-  const char* ap = string_field(root, "ap_interface", error);
-  const char* ssid = string_field(root, "ssid", error);
-  const char* security = string_field(root, "security", error);
-  const char* passphrase = string_field(root, "passphrase", error);
-  const char* band = string_field(root, "band", error);
-  const char* address = string_field(root, "address_cidr", error);
-  const char* dhcp_start = string_field(root, "dhcp_start", error);
-  const char* dhcp_end = string_field(root, "dhcp_end", error);
-  const char* upstream = string_field(root, "upstream_interface", error);
+  std::string ap = string_field(root, "ap_interface", error);
+  std::string ssid = string_field(root, "ssid", error);
+  const std::string security = string_field(root, "security", error);
+  std::string passphrase = string_field(root, "passphrase", error);
+  const std::string band = string_field(root, "band", error);
+  std::string address = string_field(root, "address_cidr", error);
+  std::string dhcp_start = string_field(root, "dhcp_start", error);
+  std::string dhcp_end = string_field(root, "dhcp_end", error);
+  std::string upstream = string_field(root, "upstream_interface", error);
   yyjson_val* channel = yyjson_obj_get(root, "channel");
   yyjson_val* dhcp = yyjson_obj_get(root, "dhcp_enabled");
   if (!error.empty()) {
@@ -671,46 +669,61 @@ Result<Profile> profile_from_json(std::string_view text) {
     return unexpected_text(json_error("field dhcp_enabled has the wrong type"));
   }
   Profile profile;
-  profile.ap_interface = ap;
-  profile.ssid = ssid;
-  if (std::strcmp(security, "open") == 0) {
+  profile.ap_interface = std::move(ap);
+  profile.ssid = std::move(ssid);
+  if (security == "open") {
     profile.security = SecurityMode::Open;
-  } else if (std::strcmp(security, "wpa2") == 0) {
+  } else if (security == "wpa2") {
     profile.security = SecurityMode::Wpa2;
-  } else if (std::strcmp(security, "wpa3") == 0) {
+  } else if (security == "wpa3") {
     profile.security = SecurityMode::Wpa3;
   } else {
     yyjson_doc_free(doc);
     return unexpected_text(json_error("field security is not valid"));
   }
-  profile.passphrase = passphrase;
-  if (std::strcmp(band, "2.4") == 0) {
+  profile.passphrase = std::move(passphrase);
+  if (band == "2.4") {
     profile.band = Band::Band24;
-  } else if (std::strcmp(band, "5") == 0) {
+  } else if (band == "5") {
     profile.band = Band::Band5;
   } else {
     yyjson_doc_free(doc);
     return unexpected_text(json_error("field band is not valid"));
   }
   profile.channel = static_cast<uint16_t>(channel_number);
-  profile.address_cidr = address;
+  profile.address_cidr = std::move(address);
   profile.dhcp_enabled = yyjson_get_bool(dhcp);
-  profile.dhcp_start = dhcp_start;
-  profile.dhcp_end = dhcp_end;
-  profile.upstream_interface = upstream;
+  profile.dhcp_start = std::move(dhcp_start);
+  profile.dhcp_end = std::move(dhcp_end);
+  profile.upstream_interface = std::move(upstream);
   yyjson_doc_free(doc);
   return profile;
 }
 
 Result<Profile> load_profile(const std::filesystem::path& path) {
-  std::ifstream input(path);
-  if (!input) {
-    return unexpected_text("The program cannot read " + path.string() + ". " +
-                           std::generic_category().message(errno));
+  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return unexpected_text("The program cannot read " + path.string() + ". " + errno_text());
   }
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return profile_from_json(buffer.str());
+  std::string text;
+  char chunk[4096];
+  while (true) {
+    const ssize_t count = ::read(fd, chunk, sizeof(chunk));
+    if (count == 0) {
+      break;
+    }
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      const std::string message = errno_text();
+      ::close(fd);
+      return unexpected_text("The program cannot read " + path.string() + ". " + message);
+    }
+    text.append(chunk, static_cast<size_t>(count));
+  }
+  ::close(fd);
+  return profile_from_json(text);
 }
 
 Result<std::optional<Profile>> load_optional(const std::filesystem::path& path) {

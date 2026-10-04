@@ -1,5 +1,7 @@
 #include "monitor.hpp"
 
+#include <limits>
+
 #include <gtest/gtest.h>
 
 namespace {
@@ -55,6 +57,32 @@ TEST(Monitor, TotalGraphAddsEachClient) {
   ASSERT_EQ(clients.size(), 2u);
   EXPECT_EQ(clients[0].graph.samples(), (std::vector<uint64_t>{0, 5}));
   EXPECT_EQ(clients[1].graph.samples(), (std::vector<uint64_t>{0, 10}));
+}
+
+TEST(Monitor, BadCountersReadAsZero) {
+  const char* text =
+      "Station aa:bb:cc:dd:ee:ff (on wlan0)\n"
+      "\trx bytes:\t-1\n"
+      "\ttx bytes:\t12abc\n"
+      "Station 11:22:33:44:55:66 (on wlan0)\n"
+      "\trx bytes:\t99999999999999999999999\n"
+      "\ttx bytes:\t+7\n";
+  const auto clients = parse_station_dump(text);
+  ASSERT_EQ(clients.size(), 2u);
+  EXPECT_EQ(clients[0].rx_bytes, 0u);
+  EXPECT_EQ(clients[0].tx_bytes, 0u);
+  EXPECT_EQ(clients[1].rx_bytes, 0u);
+  EXPECT_EQ(clients[1].tx_bytes, 7u);
+}
+
+TEST(Monitor, HugeCountersDoNotWrapTheTotal) {
+  const uint64_t max = std::numeric_limits<uint64_t>::max();
+  MonitorState state;
+  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 10, 0}});
+  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, max, max},
+                ClientSnapshot{"11:22:33:44:55:66", std::nullopt, max, 0}});
+  EXPECT_EQ(state.total_samples(), (std::vector<uint64_t>{0, max - 10}));
+  EXPECT_EQ(state.clients()[1].graph.samples(), (std::vector<uint64_t>{0, max - 10}));
 }
 
 }  // namespace

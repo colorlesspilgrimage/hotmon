@@ -3,6 +3,8 @@
 
 #include <cctype>
 #include <set>
+#include <charconv>
+#include <limits>
 
 namespace hotmon {
 namespace {
@@ -35,18 +37,6 @@ std::optional<std::string> value_after(std::string_view line, std::string_view l
   return trim_copy(line.substr(label.size()));
 }
 
-uint64_t parse_counter(std::string_view text) {
-  const std::string token(text.substr(0, text.find_first_of(" \t")));
-  if (token.empty()) {
-    return 0;
-  }
-  try {
-    return std::stoull(token);
-  } catch (const std::exception&) {
-    return 0;
-  }
-}
-
 std::vector<std::string> split_ws(std::string_view text) {
   std::vector<std::string> parts;
   size_t index = 0;
@@ -64,6 +54,29 @@ std::vector<std::string> split_ws(std::string_view text) {
     parts.emplace_back(text.substr(start, index - start));
   }
   return parts;
+}
+
+uint64_t parse_counter(std::string_view text) {
+  const auto parts = split_ws(text);
+  if (parts.empty()) {
+    return 0;
+  }
+  std::string_view token = parts[0];
+  if (token.starts_with('+')) {
+    token.remove_prefix(1);
+  }
+  uint64_t value = 0;
+  const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), value);
+  if (token.empty() || error != std::errc() || end != token.data() + token.size()) {
+    return 0;
+  }
+  return value;
+}
+
+uint64_t saturating_add(uint64_t left, uint64_t right) {
+  return right > std::numeric_limits<uint64_t>::max() - left
+             ? std::numeric_limits<uint64_t>::max()
+             : left + right;
 }
 
 }  // namespace
@@ -93,8 +106,8 @@ void MonitorState::update(const std::vector<ClientSnapshot>& clients) {
   uint64_t total_now = 0;
   for (const ClientSnapshot& client : clients) {
     const std::string mac = ascii_lower(client.mac);
-    const uint64_t bytes = client.rx_bytes + client.tx_bytes;
-    total_now += bytes;
+    const uint64_t bytes = saturating_add(client.rx_bytes, client.tx_bytes);
+    total_now = saturating_add(total_now, bytes);
     seen.insert(mac);
     auto [entry, inserted] = clients_.try_emplace(mac);
     if (inserted) {

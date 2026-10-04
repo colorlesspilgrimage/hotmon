@@ -80,4 +80,19 @@ TEST(ProfileCompat, StrictReadRules) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(ProfileCompat, EscapedNulIsNotCutOff) {
+  const auto dir = scratch_dir();
+  const auto path = dir / "profile.json";
+  std::ofstream(path)
+      << R"({"ap_interface":"wlan0","ssid":"Hot\u0000mon","security":"wpa2","passphrase":"correct-horse","band":"2.4","channel":6,"address_cidr":"192.168.42.0/24","dhcp_enabled":true,"dhcp_start":"192.168.42.10","dhcp_end":"192.168.42.100","upstream_interface":"eth0"})";
+  auto loaded = load_profile(path);
+  ASSERT_TRUE(loaded) << loaded.error();
+  EXPECT_EQ(loaded->ssid, std::string("Hot\0mon", 7));
+  EXPECT_FALSE(loaded->check_settings());
+  std::ofstream(path)
+      << R"({"ap_interface":"wlan0","ssid":"Hotmon","security":"wpa2\u0000x","passphrase":"correct-horse","band":"2.4","channel":6,"address_cidr":"192.168.42.0/24","dhcp_enabled":true,"dhcp_start":"192.168.42.10","dhcp_end":"192.168.42.100","upstream_interface":"eth0"})";
+  EXPECT_FALSE(load_profile(path));
+  std::filesystem::remove_all(dir);
+}
+
 }  // namespace

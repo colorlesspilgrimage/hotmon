@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <langinfo.h>
 #include <locale.h>
+#include <wchar.h>
 
 namespace hotmon {
 namespace {
@@ -12,14 +13,56 @@ bool utf8_locale() {
   return codeset != nullptr && std::string(codeset) == "UTF-8";
 }
 
+// Return the byte length of the UTF-8 sequence at index. Set columns to its screen width.
+size_t next_char(const std::string& text, size_t index, int& columns) {
+  const auto byte = static_cast<unsigned char>(text[index]);
+  size_t length = 1;
+  char32_t code = byte;
+  if (byte >= 0xF0) {
+    length = 4;
+    code = byte & 0x07;
+  } else if (byte >= 0xE0) {
+    length = 3;
+    code = byte & 0x0F;
+  } else if (byte >= 0xC0) {
+    length = 2;
+    code = byte & 0x1F;
+  }
+  size_t used = 1;
+  while (used < length && index + used < text.size() &&
+         (static_cast<unsigned char>(text[index + used]) & 0xC0) == 0x80) {
+    code = (code << 6) | (static_cast<unsigned char>(text[index + used]) & 0x3F);
+    ++used;
+  }
+  const int width = used == length ? ::wcwidth(static_cast<wchar_t>(code)) : -1;
+  columns = width < 0 ? 1 : width;
+  return used;
+}
+
+// Cut the text at a character boundary so that it uses at most width columns.
+// Set used to the columns of the result.
+size_t cut_columns(const std::string& text, size_t start, int width, int& used) {
+  size_t index = start;
+  used = 0;
+  while (index < text.size()) {
+    int columns = 0;
+    const size_t length = next_char(text, index, columns);
+    if (used + columns > width) {
+      break;
+    }
+    used += columns;
+    index += length;
+  }
+  return index;
+}
+
 std::string pad(std::string text, int width) {
   if (width < 0) {
     width = 0;
   }
-  if (static_cast<int>(text.size()) > width) {
-    text.resize(static_cast<size_t>(width));
-  }
-  text.append(static_cast<size_t>(width) - text.size(), ' ');
+  int used = 0;
+  text.resize(cut_columns(text, 0, width, used));
+  text.append(static_cast<size_t>(width - used), ' ');
   return text;
 }
 
@@ -49,8 +92,14 @@ std::vector<std::string> wrap_text(const std::string& text, int width) {
   std::vector<std::string> lines;
   size_t start = 0;
   while (start < text.size()) {
-    lines.push_back(text.substr(start, static_cast<size_t>(width)));
-    start += static_cast<size_t>(width);
+    int used = 0;
+    size_t end = cut_columns(text, start, width, used);
+    if (end == start) {
+      int columns = 0;
+      end = start + next_char(text, start, columns);
+    }
+    lines.push_back(text.substr(start, end - start));
+    start = end;
   }
   if (lines.empty()) {
     lines.emplace_back();

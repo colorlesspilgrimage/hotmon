@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <iterator>
 #include <fstream>
@@ -490,17 +491,19 @@ Result<int> read_pid(const std::filesystem::path& path) {
   if (!input) {
     return unexpected_text("The pid file " + path.string() + " is not readable. " + errno_text());
   }
-  std::string text;
-  std::getline(input, text);
-  try {
-    const int pid = std::stoi(trim_copy(text));
-    if (pid <= 0) {
-      return unexpected_text("The pid file " + path.string() + " does not contain a pid.");
-    }
-    return pid;
-  } catch (const std::exception&) {
+  const std::string text = trim_copy(std::string((std::istreambuf_iterator<char>(input)),
+                                                 std::istreambuf_iterator<char>()));
+  std::string_view digits = text;
+  if (digits.starts_with('+')) {
+    digits.remove_prefix(1);
+  }
+  int pid = 0;
+  const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), pid);
+  if (digits.empty() || digits.starts_with('-') || error != std::errc() ||
+      end != digits.data() + digits.size() || pid <= 0) {
     return unexpected_text("The pid file " + path.string() + " does not contain a pid.");
   }
+  return pid;
 }
 
 std::optional<int> read_pid_optional(const std::filesystem::path& path) {

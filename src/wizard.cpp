@@ -70,6 +70,53 @@ void add_if_missing(SelectBox& box, std::string label, std::string value) {
   }
 }
 
+std::string* typed_target(Page page, size_t field, std::string& ssid, std::string& passphrase,
+                          std::string& address, std::string& start, std::string& end) {
+  if (page == Page::Ssid) {
+    return &ssid;
+  }
+  if (page == Page::Passphrase) {
+    return &passphrase;
+  }
+  if (page != Page::Advanced) {
+    return nullptr;
+  }
+  if (field == 2) {
+    return &address;
+  }
+  if (field == 4) {
+    return &start;
+  }
+  if (field == 5) {
+    return &end;
+  }
+  return nullptr;
+}
+
+size_t char_count(std::string_view text) {
+  return static_cast<size_t>(std::count_if(text.begin(), text.end(), [](char ch) {
+    return (static_cast<unsigned char>(ch) & 0xC0) != 0x80;
+  }));
+}
+
+void append_utf8(std::string& text, char32_t ch) {
+  if (ch < 0x80) {
+    text.push_back(static_cast<char>(ch));
+  } else if (ch < 0x800) {
+    text.push_back(static_cast<char>(0xC0 | (ch >> 6)));
+    text.push_back(static_cast<char>(0x80 | (ch & 0x3F)));
+  } else if (ch < 0x10000) {
+    text.push_back(static_cast<char>(0xE0 | (ch >> 12)));
+    text.push_back(static_cast<char>(0x80 | ((ch >> 6) & 0x3F)));
+    text.push_back(static_cast<char>(0x80 | (ch & 0x3F)));
+  } else {
+    text.push_back(static_cast<char>(0xF0 | (ch >> 18)));
+    text.push_back(static_cast<char>(0x80 | ((ch >> 12) & 0x3F)));
+    text.push_back(static_cast<char>(0x80 | ((ch >> 6) & 0x3F)));
+    text.push_back(static_cast<char>(0x80 | (ch & 0x3F)));
+  }
+}
+
 }  // namespace
 
 const char* page_title(Page page) {
@@ -117,7 +164,8 @@ void Wizard::rebuild_upstream(const HostFacts& facts) {
     choices.push_back(Choice{info.name, info.name});
   }
   choices.push_back(Choice{"None", "none"});
-  upstream = SelectBox(std::move(choices), choices.empty() ? 0 : choices.size() - 1);
+  const size_t none_index = choices.size() - 1;
+  upstream = SelectBox(std::move(choices), none_index);
   if (previous != "none") {
     upstream.select_value(previous);
   }
@@ -324,7 +372,7 @@ std::vector<FieldLine> Wizard::field_lines() const {
     case Page::Security:
       return {selection("Security mode", security, true)};
     case Page::Passphrase:
-      return {typed("Passphrase", std::string(passphrase.size(), '*'), true)};
+      return {typed("Passphrase", std::string(char_count(passphrase), '*'), true)};
     case Page::Upstream:
       return {selection("Upstream interface", upstream, true)};
     case Page::BandChannel:
@@ -384,50 +432,31 @@ std::vector<std::string> Wizard::review_lines() const {
 }
 
 void Wizard::push_char(char32_t ch) {
-  if (ch < 32 || ch == 127) {
+  if (ch < 0x20 || (ch >= 0x7F && ch <= 0x9F) || (ch >= 0xD800 && ch <= 0xDFFF) || ch > 0x10FFFF) {
     return;
   }
   cancelled = false;
-  std::string* target = nullptr;
-  if (page == Page::Ssid) {
-    target = &ssid;
-  } else if (page == Page::Passphrase) {
-    target = &passphrase;
-  } else if (page == Page::Advanced) {
-    if (field == 2) {
-      target = &adv_address_cidr;
-    } else if (field == 4) {
-      target = &adv_dhcp_start;
-    } else if (field == 5) {
-      target = &adv_dhcp_end;
-    }
-  }
-  if (target == nullptr || target->size() >= 128) {
+  std::string* target = typed_target(page, field, ssid, passphrase, adv_address_cidr,
+                                     adv_dhcp_start, adv_dhcp_end);
+  if (target == nullptr || char_count(*target) >= 128) {
     return;
   }
-  if (ch < 128) {
-    target->push_back(static_cast<char>(ch));
-  }
+  append_utf8(*target, ch);
 }
 
 void Wizard::backspace() {
   cancelled = false;
-  std::string* target = nullptr;
-  if (page == Page::Ssid) {
-    target = &ssid;
-  } else if (page == Page::Passphrase) {
-    target = &passphrase;
-  } else if (page == Page::Advanced) {
-    if (field == 2) {
-      target = &adv_address_cidr;
-    } else if (field == 4) {
-      target = &adv_dhcp_start;
-    } else if (field == 5) {
-      target = &adv_dhcp_end;
-    }
+  std::string* target = typed_target(page, field, ssid, passphrase, adv_address_cidr,
+                                     adv_dhcp_start, adv_dhcp_end);
+  if (target == nullptr) {
+    return;
   }
-  if (target != nullptr && !target->empty()) {
+  while (!target->empty()) {
+    const auto byte = static_cast<unsigned char>(target->back());
     target->pop_back();
+    if ((byte & 0xC0) != 0x80) {
+      break;
+    }
   }
 }
 
