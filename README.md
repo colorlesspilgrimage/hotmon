@@ -7,6 +7,34 @@ The program monitors traffic on the hotspot.
 The program stores a profile on disk.
 The program loads that profile on the next start.
 
+## Build
+
+Install cmake, gtest, yyjson, ncurses, and pkgconf.
+Run these commands in the repository:
+
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+The program file is `build/hotmon`.
+The wizard works without root.
+Use root to start the hotspot:
+
+```
+sudo build/hotmon
+```
+
+## Wizard
+
+The wizard picks the band, the channel, the address range, and the DHCP range.
+The default band is 5 GHz on channel 36.
+Increased compatibility uses 2.4 GHz on channel 6.
+Press `a` on the network page to open advanced setup.
+Advanced setup is optional.
+The user does not type the security mode, the band, or the channel.
+
 ## Privilege requirements
 
 The program needs root, or the CAP_NET_ADMIN capability, to start the hotspot.

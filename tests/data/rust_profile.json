@@ -1,0 +1,13 @@
+{
+  "ap_interface": "wlan0",
+  "ssid": "Hotmon",
+  "security": "wpa2",
+  "passphrase": "correct-horse",
+  "band": "2.4",
+  "channel": 6,
+  "address_cidr": "192.168.42.0/24",
+  "dhcp_enabled": true,
+  "dhcp_start": "192.168.42.10",
+  "dhcp_end": "192.168.42.100",
+  "upstream_interface": "eth0"
+}
