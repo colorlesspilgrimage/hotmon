@@ -74,4 +74,4 @@ Result<std::optional<std::vector<uint8_t>>> LocalCapture::try_recv() {
       std::vector<uint8_t>(buffer_.begin(), buffer_.begin() + size));
 }
 
-}  // namespace hotmon
+}

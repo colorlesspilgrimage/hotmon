@@ -422,4 +422,4 @@ TEST(Wizard, OpenUpstreamReviewShowsTheWarning) {
   EXPECT_NE(join(wizard.review_lines()).find(OPEN_UPSTREAM_WARNING), std::string::npos);
 }
 
-}  // namespace
+}

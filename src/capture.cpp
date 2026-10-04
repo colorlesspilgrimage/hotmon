@@ -65,7 +65,7 @@ PacketSummary summarize_ipv4(std::span<const uint8_t> frame, size_t header) {
   return make_summary(frame.size(), source, destination, proto);
 }
 
-}  // namespace
+}
 
 std::string PacketSummary::text() const {
   return std::format("{} B {} -> {} {}", length, source, destination, protocol);
@@ -219,4 +219,4 @@ PacketSummary summarize(std::span<const uint8_t> frame) {
   }
 }
 
-}  // namespace hotmon
+}

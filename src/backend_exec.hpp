@@ -54,4 +54,4 @@ std::filesystem::path forwarding_path(const Paths& paths, std::string_view iface
 Result<bool> enable_forwarding(const Paths& paths, const std::vector<std::string>& ifaces);
 bool stop_target_missing(std::string_view message);
 
-}  // namespace hotmon
+}

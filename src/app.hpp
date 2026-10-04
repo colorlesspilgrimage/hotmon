@@ -82,4 +82,4 @@ struct App {
   Step accept_capture();
 };
 
-}  // namespace hotmon
+}

@@ -54,4 +54,4 @@ std::vector<ClientSnapshot> parse_station_dump(std::string_view text);
 std::vector<std::pair<std::string, std::string>> parse_neigh(std::string_view text);
 std::vector<ClientSnapshot> clients_from_text(std::string_view dump, std::string_view neigh);
 
-}  // namespace hotmon
+}

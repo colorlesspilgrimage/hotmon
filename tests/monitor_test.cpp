@@ -57,4 +57,4 @@ TEST(Monitor, TotalGraphAddsEachClient) {
   EXPECT_EQ(clients[1].graph.samples(), (std::vector<uint64_t>{0, 10}));
 }
 
-}  // namespace
+}

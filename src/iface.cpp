@@ -50,7 +50,7 @@ void add_unique(std::vector<int>& values, int channel) {
   }
 }
 
-}  // namespace
+}
 
 bool valid_name(std::string_view name) {
   if (name.empty() || name.size() > 15) {
@@ -219,4 +219,4 @@ std::vector<IfaceInfo> upstream_candidates(const std::vector<IfaceInfo>& interfa
   return result;
 }
 
-}  // namespace hotmon
+}

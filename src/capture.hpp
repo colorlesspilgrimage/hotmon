@@ -71,4 +71,4 @@ class CaptureControl {
 Result<std::string> capture_interface(std::string_view requested, std::string_view hotspot);
 PacketSummary summarize(std::span<const uint8_t> frame);
 
-}  // namespace hotmon
+}

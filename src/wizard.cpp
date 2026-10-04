@@ -70,7 +70,7 @@ void add_if_missing(SelectBox& box, std::string label, std::string value) {
   }
 }
 
-}  // namespace
+}
 
 const char* page_title(Page page) {
   switch (page) {
@@ -747,4 +747,4 @@ Result<Profile> Wizard::fail_profile(std::string message) {
   return unexpected_text(std::move(message));
 }
 
-}  // namespace hotmon
+}

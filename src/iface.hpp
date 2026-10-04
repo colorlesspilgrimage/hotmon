@@ -47,4 +47,4 @@ std::vector<IfaceInfo> ap_candidates(const std::vector<IfaceInfo>& interfaces);
 std::vector<IfaceInfo> upstream_candidates(const std::vector<IfaceInfo>& interfaces,
                                            std::string_view ap);
 
-}  // namespace hotmon
+}

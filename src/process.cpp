@@ -15,7 +15,7 @@ namespace {
 
 std::string errno_text(int err) { return std::strerror(err); }
 
-}  // namespace
+}
 
 FileDescriptor::FileDescriptor(int fd) : fd_(fd) {}
 
@@ -162,4 +162,4 @@ Result<CommandOutput> run_capture(const std::vector<std::string>& argv) {
   return output;
 }
 
-}  // namespace hotmon
+}

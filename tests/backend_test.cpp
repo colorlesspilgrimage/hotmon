@@ -629,4 +629,4 @@ TEST(Backend, SecondApplyKeepsTheOriginalHostapdBackup) {
   std::filesystem::remove_all(paths.dnsmasq_dir());
 }
 
-}  // namespace
+}

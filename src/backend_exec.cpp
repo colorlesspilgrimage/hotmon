@@ -745,4 +745,4 @@ Result<StartReport> execute_plan(const ApplyPlan& plan, Runner& runner, ProcessC
   return StartReport{std::move(started), private_hostapd};
 }
 
-}  // namespace hotmon
+}

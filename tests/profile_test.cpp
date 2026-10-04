@@ -134,4 +134,4 @@ TEST(Profile, Ipv4RejectsRustForms) {
   EXPECT_FALSE(parse_ipv4("256.1.1.1"));
 }
 
-}  // namespace
+}

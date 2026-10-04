@@ -104,7 +104,7 @@ ApplyPlan hostapd_plan(const Profile& profile, const Paths& paths, bool existing
   return plan;
 }
 
-}  // namespace
+}
 
 const char* label(BackendKind kind) {
   switch (kind) {
@@ -242,4 +242,4 @@ Result<void> run_stop_commands(const std::vector<PlannedCommand>& commands, Runn
   return {};
 }
 
-}  // namespace hotmon
+}

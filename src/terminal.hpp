@@ -17,4 +17,4 @@ class Terminal {
 
 int run_ui(App& app);
 
-}  // namespace hotmon
+}

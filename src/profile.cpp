@@ -130,7 +130,7 @@ const char* string_field(yyjson_val* root, const char* key, std::string& error) 
   return yyjson_get_str(value);
 }
 
-}  // namespace
+}
 
 const char* as_str(SecurityMode mode) {
   switch (mode) {
@@ -725,4 +725,4 @@ Result<std::optional<Profile>> load_optional(const std::filesystem::path& path) 
   return std::optional<Profile>(std::move(*profile));
 }
 
-}  // namespace hotmon
+}

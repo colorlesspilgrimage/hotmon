@@ -31,4 +31,4 @@ class SelectBox {
   size_t index_ = 0;
 };
 
-}  // namespace hotmon
+}

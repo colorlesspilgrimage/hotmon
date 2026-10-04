@@ -36,4 +36,4 @@ AutoRadio choose_radio(const IfaceInfo& ap, bool increased_compatibility);
 std::vector<Ipv4Range> candidate_networks();
 uint32_t ipv4_host(int a, int b, int c, int d);
 
-}  // namespace hotmon
+}

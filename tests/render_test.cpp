@@ -106,4 +106,4 @@ TEST(Render, SparklineUsesBlockCharacters) {
   EXPECT_NE(text.find("█"), std::string::npos);
 }
 
-}  // namespace
+}

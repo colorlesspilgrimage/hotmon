@@ -80,4 +80,4 @@ TEST(ProfileCompat, StrictReadRules) {
   std::filesystem::remove_all(dir);
 }
 
-}  // namespace
+}

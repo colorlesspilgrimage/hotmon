@@ -94,7 +94,7 @@ void open_capture(App& app) {
   }
 }
 
-}  // namespace
+}
 
 Terminal::Terminal() {
   active_terminal = this;
@@ -192,4 +192,4 @@ int run_ui(App& app) {
   }
 }
 
-}  // namespace hotmon
+}
