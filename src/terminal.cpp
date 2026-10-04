@@ -23,7 +23,12 @@ void restore_terminal() {
   }
 }
 
-void on_signal(int) { restore_terminal(); }
+// Restore the terminal, then end the program with the default action of the signal.
+void on_signal(int sig) {
+  restore_terminal();
+  ::signal(sig, SIG_DFL);
+  ::raise(sig);
+}
 
 Key map_key(wint_t ch, bool function_key) {
   Key key;
@@ -96,6 +101,12 @@ void open_capture(App& app) {
 
 }  // namespace
 
+void install_signal_handlers() {
+  ::signal(SIGTERM, on_signal);
+  ::signal(SIGINT, on_signal);
+  ::signal(SIGHUP, on_signal);
+}
+
 Terminal::Terminal() {
   active_terminal = this;
   std::setlocale(LC_ALL, "");
@@ -103,9 +114,7 @@ Terminal::Terminal() {
     restore_terminal();
     std::abort();
   });
-  ::signal(SIGTERM, on_signal);
-  ::signal(SIGINT, on_signal);
-  ::signal(SIGHUP, on_signal);
+  install_signal_handlers();
   initscr();
   raw();
   noecho();

@@ -87,7 +87,7 @@ std::vector<Ipv4Range> candidate_networks() {
   return ranges;
 }
 
-std::vector<Ipv4Range> parse_proc_net_route(std::string_view text) {
+std::vector<Ipv4Range> parse_proc_net_route(std::string_view text, std::string_view exclude_iface) {
   std::vector<Ipv4Range> ranges;
   size_t start = 0;
   while (start <= text.size()) {
@@ -111,7 +111,8 @@ std::vector<Ipv4Range> parse_proc_net_route(std::string_view text) {
       }
       parts.emplace_back(line.substr(token, index - token));
     }
-    if (parts.size() >= 8 && parts[0] != "Iface") {
+    if (parts.size() >= 8 && parts[0] != "Iface" && parts[0] != "lo" &&
+        parts[0] != exclude_iface) {
       const uint32_t mask = ntohl(parse_hex(parts[7]));
       if (mask != 0) {
         const uint32_t destination = ntohl(parse_hex(parts[1]));
@@ -148,7 +149,7 @@ std::vector<Ipv4Range> read_local_networks(std::string_view exclude_iface) {
   std::ifstream route("/proc/net/route");
   std::ostringstream buffer;
   buffer << route.rdbuf();
-  for (const Ipv4Range& item : parse_proc_net_route(buffer.str())) {
+  for (const Ipv4Range& item : parse_proc_net_route(buffer.str(), exclude_iface)) {
     ranges.push_back(item);
   }
   return ranges;

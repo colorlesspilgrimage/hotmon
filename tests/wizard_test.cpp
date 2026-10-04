@@ -422,4 +422,49 @@ TEST(Wizard, OpenUpstreamReviewShowsTheWarning) {
   EXPECT_NE(join(wizard.review_lines()).find(OPEN_UPSTREAM_WARNING), std::string::npos);
 }
 
+TEST(Wizard, UpstreamBoxOpensOnNone) {
+  auto wizard = Wizard::make(facts_with(sample_interfaces()));
+  ASSERT_GT(wizard.upstream.choices().size(), 1u);
+  EXPECT_EQ(wizard.upstream.current().value, "none");
+}
+
+TEST(Wizard, TypedFieldsAcceptUnicodeText) {
+  auto wizard = Wizard::make(facts_with(sample_interfaces()));
+  wizard.page = Page::Ssid;
+  wizard.push_char(U'C');
+  wizard.push_char(U'a');
+  wizard.push_char(U'f');
+  wizard.push_char(U'\u00e9');
+  wizard.push_char(U'\U0001F600');
+  EXPECT_EQ(wizard.ssid, "Caf\xc3\xa9\xf0\x9f\x98\x80");
+  EXPECT_TRUE(validate_ssid(wizard.ssid));
+}
+
+TEST(Wizard, TypedFieldsRejectControlAndInvalidCodePoints) {
+  auto wizard = Wizard::make(facts_with(sample_interfaces()));
+  wizard.page = Page::Ssid;
+  wizard.push_char(U'\u0085');
+  wizard.push_char(static_cast<char32_t>(0xD800));
+  wizard.push_char(static_cast<char32_t>(0x110000));
+  EXPECT_EQ(wizard.ssid, "");
+}
+
+TEST(Wizard, BackspaceRemovesOneWholeCharacter) {
+  auto wizard = Wizard::make(facts_with(sample_interfaces()));
+  wizard.page = Page::Ssid;
+  wizard.push_char(U'a');
+  wizard.push_char(U'\u00e9');
+  wizard.backspace();
+  EXPECT_EQ(wizard.ssid, "a");
+}
+
+TEST(Wizard, TypedFieldLimitCountsCharacters) {
+  auto wizard = Wizard::make(facts_with(sample_interfaces()));
+  wizard.page = Page::Ssid;
+  for (int index = 0; index < 140; ++index) {
+    wizard.push_char(U'\u00e9');
+  }
+  EXPECT_EQ(wizard.ssid.size(), 256u);
+}
+
 }  // namespace

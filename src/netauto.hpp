@@ -30,7 +30,9 @@ struct AutoRadio {
 
 bool overlaps(Ipv4Range left, Ipv4Range right);
 std::vector<Ipv4Range> read_local_networks(std::string_view exclude_iface);
-std::vector<Ipv4Range> parse_proc_net_route(std::string_view text);
+// Skip the routes of exclude_iface and of lo.
+std::vector<Ipv4Range> parse_proc_net_route(std::string_view text,
+                                            std::string_view exclude_iface = {});
 Result<AutoNetwork> choose_network(const std::vector<Ipv4Range>& used);
 AutoRadio choose_radio(const IfaceInfo& ap, bool increased_compatibility);
 std::vector<Ipv4Range> candidate_networks();

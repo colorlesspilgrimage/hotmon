@@ -70,6 +70,16 @@ TEST(Profile, CorruptProfileReturnsAnError) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(Profile, DirectoryProfileReportsTheReadError) {
+  const auto dir = scratch_dir();
+  const auto path = dir / "profile.json";
+  std::filesystem::create_directories(path);
+  auto error = load_optional(path);
+  ASSERT_FALSE(error);
+  EXPECT_EQ(error.error(), "The program cannot read " + path.string() + ". Is a directory");
+  std::filesystem::remove_all(dir);
+}
+
 TEST(Profile, ProfilePathUsesXdgThenHome) {
   EXPECT_EQ(profile_path_from("/cfg", "/home/sam"),
             std::filesystem::path("/cfg/hotmon/profile.json"));

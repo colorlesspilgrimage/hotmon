@@ -106,4 +106,42 @@ TEST(Render, SparklineUsesBlockCharacters) {
   EXPECT_NE(text.find("█"), std::string::npos);
 }
 
+TEST(Render, MonitorGraphShowsEverySampleInUtf8) {
+  setlocale(LC_ALL, "C.UTF-8");
+  auto app = App::from_parts(BackendKind::NetworkManager, sample_interfaces(),
+                             "/tmp/hotmon-graph-screen.json", std::nullopt);
+  app.view = View::Monitor;
+  for (uint64_t total = 0; total < 40; ++total) {
+    app.monitor.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, total * total, 0}});
+  }
+  const auto lines = render(app, 80, 40);
+  const std::string graph = sparkline_text(app.monitor.total_samples(), 78);
+  EXPECT_EQ(lines[5], "|" + graph + std::string(78 - 40, ' ') + "|");
+  setlocale(LC_ALL, "C");
+}
+
+TEST(Render, WrapKeepsMultibyteCharactersWhole) {
+  auto app = App::from_parts(BackendKind::NetworkManager, {}, "/tmp/hotmon-wrap-test.json",
+                             std::nullopt);
+  std::string notice;
+  for (int index = 0; index < 30; ++index) {
+    notice += "\xc3\xa9";
+  }
+  app.notice = notice;
+  const auto lines = render(app, 12, 24);
+  size_t notice_rows = 0;
+  for (const std::string& line : lines) {
+    size_t columns = 0;
+    for (char ch : line) {
+      columns += (static_cast<unsigned char>(ch) & 0xC0) != 0x80 ? 1 : 0;
+    }
+    EXPECT_EQ(columns, 12u) << line;
+    if (line.find('\xc3') != std::string::npos) {
+      EXPECT_EQ(line, "|" + std::string(notice.data(), 20) + "|");
+      ++notice_rows;
+    }
+  }
+  EXPECT_EQ(notice_rows, 3u);
+}
+
 }  // namespace

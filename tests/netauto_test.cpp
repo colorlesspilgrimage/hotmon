@@ -78,6 +78,21 @@ TEST(Netauto, ParseProcNetRouteSkipsTheDefaultRoute) {
   EXPECT_EQ(ranges[0].prefix, 24);
 }
 
+TEST(Netauto, ParseProcNetRouteSkipsTheAccessPointAndLoopback) {
+  const char* text =
+      "Iface Destination Gateway Flags RefCnt Use Metric Mask\n"
+      "wlan0 002AA8C0 00000000 0001 0 0 0 00FFFFFF 0 0 0\n"
+      "lo 0000007F 00000000 0001 0 0 0 000000FF 0 0 0\n"
+      "eth0 0000000A 00000000 0001 0 0 0 000000FF 0 0 0\n";
+  const auto ranges = parse_proc_net_route(text, "wlan0");
+  ASSERT_EQ(ranges.size(), 1u);
+  EXPECT_EQ(ranges[0].base, ipv4_host(10, 0, 0, 0));
+  EXPECT_EQ(ranges[0].prefix, 8);
+  auto chosen = choose_network(ranges);
+  ASSERT_TRUE(chosen);
+  EXPECT_EQ(chosen->address_cidr, "192.168.42.0/24");
+}
+
 TEST(Netauto, DhcpRangeNeverContainsTheGateway) {
   for (const auto& candidate : candidate_networks()) {
     auto chosen = choose_network({});

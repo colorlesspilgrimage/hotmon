@@ -629,4 +629,23 @@ TEST(Backend, SecondApplyKeepsTheOriginalHostapdBackup) {
   std::filesystem::remove_all(paths.dnsmasq_dir());
 }
 
+TEST(Backend, PidFileMustHoldOnlyOnePid) {
+  const auto dir = scratch_dir();
+  const auto path = dir / "test.pid";
+  auto pid_from = [&](const std::string& text) {
+    std::ofstream(path, std::ios::trunc) << text;
+    return read_pid(path);
+  };
+  ASSERT_TRUE(pid_from("1234\n"));
+  EXPECT_EQ(*pid_from("1234\n"), 1234);
+  EXPECT_EQ(*pid_from("+77"), 77);
+  EXPECT_FALSE(pid_from("123abc\n"));
+  EXPECT_FALSE(pid_from("123\n456\n"));
+  EXPECT_FALSE(pid_from("-5\n"));
+  EXPECT_FALSE(pid_from("0\n"));
+  EXPECT_FALSE(pid_from("99999999999\n"));
+  EXPECT_FALSE(pid_from("\n"));
+  std::filesystem::remove_all(dir);
+}
+
 }  // namespace

@@ -16,5 +16,7 @@ class Terminal {
 };
 
 int run_ui(App& app);
+// SIGTERM, SIGINT, and SIGHUP restore the terminal and then end the program.
+void install_signal_handlers();
 
 }  // namespace hotmon
