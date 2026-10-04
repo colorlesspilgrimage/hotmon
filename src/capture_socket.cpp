@@ -39,7 +39,7 @@ Result<LocalCapture> LocalCapture::open(std::string_view interface) {
   if (!valid_name(interface)) {
     return unexpected_text("The capture interface name is not valid.");
   }
-  const int fd = ::socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+  const int fd = ::socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, htons(ETH_P_ALL));
   if (fd < 0) {
     return unexpected_text(std::strerror(errno));
   }

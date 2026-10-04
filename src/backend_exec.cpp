@@ -250,9 +250,15 @@ Result<void> install_files_into(const ApplyPlan& plan, const Paths& paths,
       return ready;
     }
     if (!std::filesystem::exists(paths.dnsmasq_lease())) {
-      if (auto lease = write_text(paths.dnsmasq_lease(), "", 0666); !lease) {
+      // dnsmasq opens the lease file as root before it drops to nobody. Other users must not write it.
+      if (auto lease = write_text(paths.dnsmasq_lease(), "", 0644); !lease) {
         return lease;
       }
+    } else if (std::filesystem::is_regular_file(
+                   std::filesystem::symlink_status(paths.dnsmasq_lease()))) {
+      std::error_code error;
+      std::filesystem::permissions(paths.dnsmasq_lease(), std::filesystem::perms(0644),
+                                   std::filesystem::perm_options::replace, error);
     }
   }
   return {};
