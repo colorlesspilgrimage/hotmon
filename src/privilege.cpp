@@ -25,28 +25,20 @@ namespace {
 
 constexpr uint32_t kMaxFrameBytes = 1024 * 1024;
 
-struct YyDoc {
-  yyjson_doc* doc = nullptr;
-  ~YyDoc() {
-    if (doc != nullptr) {
-      yyjson_doc_free(doc);
-    }
-  }
-  YyDoc() = default;
-  YyDoc(const YyDoc&) = delete;
-  YyDoc& operator=(const YyDoc&) = delete;
+struct NoCopy {
+  NoCopy() = default;
+  NoCopy(const NoCopy&) = delete;
+  NoCopy& operator=(const NoCopy&) = delete;
 };
 
-struct YyMut {
+struct YyDoc : NoCopy {
+  yyjson_doc* doc = nullptr;
+  ~YyDoc() { yyjson_doc_free(doc); }
+};
+
+struct YyMut : NoCopy {
   yyjson_mut_doc* doc = nullptr;
-  ~YyMut() {
-    if (doc != nullptr) {
-      yyjson_mut_doc_free(doc);
-    }
-  }
-  YyMut() = default;
-  YyMut(const YyMut&) = delete;
-  YyMut& operator=(const YyMut&) = delete;
+  ~YyMut() { yyjson_mut_doc_free(doc); }
 };
 
 std::string mut_text(yyjson_mut_doc* doc) {
@@ -60,6 +52,20 @@ std::string mut_text(yyjson_mut_doc* doc) {
   return text;
 }
 
+Result<void> take_count(ssize_t count, size_t& done, std::string_view fail, std::string_view early) {
+  if (count < 0) {
+    if (errno == EINTR) {
+      return {};
+    }
+    return unexpected_text(std::string(fail) + errno_text());
+  }
+  if (count == 0) {
+    return unexpected_text(std::string(early));
+  }
+  done += static_cast<size_t>(count);
+  return {};
+}
+
 Result<void> write_all(int fd, const char* data, size_t size) {
   size_t done = 0;
   while (done < size) {
@@ -67,16 +73,11 @@ Result<void> write_all(int fd, const char* data, size_t size) {
     if (count < 0 && errno == ENOTSOCK) {
       count = ::write(fd, data + done, size - done);
     }
-    if (count < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return unexpected_text("The frame write failed. " + errno_text());
+    if (auto step = take_count(count, done, "The frame write failed. ",
+                               "The frame write stopped early.");
+        !step) {
+      return step;
     }
-    if (count == 0) {
-      return unexpected_text("The frame write stopped early.");
-    }
-    done += static_cast<size_t>(count);
   }
   return {};
 }
@@ -105,15 +106,12 @@ Result<void> read_some(int fd, char* data, size_t size, size_t& done, int* recei
     message.msg_control = control;
     message.msg_controllen = sizeof(control);
     const ssize_t count = ::recvmsg(fd, &message, MSG_CMSG_CLOEXEC);
-    if (count < 0) {
-      if (errno == EINTR) {
-        want_fd = true;
-        return {};
-      }
-      return unexpected_text("The frame read failed. " + errno_text());
+    if (count < 0 && errno == EINTR) {
+      want_fd = true;
+      return {};
     }
-    if (count == 0) {
-      return unexpected_text("The frame ended early.");
+    if (count <= 0) {
+      return take_count(count, done, "The frame read failed. ", "The frame ended early.");
     }
     for (cmsghdr* header = CMSG_FIRSTHDR(&message); header != nullptr;
          header = CMSG_NXTHDR(&message, header)) {
@@ -140,17 +138,7 @@ Result<void> read_some(int fd, char* data, size_t size, size_t& done, int* recei
     return {};
   }
   const ssize_t count = ::read(fd, data + done, size - done);
-  if (count < 0) {
-    if (errno == EINTR) {
-      return {};
-    }
-    return unexpected_text("The frame read failed. " + errno_text());
-  }
-  if (count == 0) {
-    return unexpected_text("The frame ended early.");
-  }
-  done += static_cast<size_t>(count);
-  return {};
+  return take_count(count, done, "The frame read failed. ", "The frame ended early.");
 }
 
 Result<void> read_exact(int fd, char* data, size_t size, int* received_fd) {
@@ -191,6 +179,18 @@ int write_response(const Response& response, int pass_fd) {
   return 0;
 }
 
+int reply_error(std::string text, int code) {
+  (void)write_response(failed_response(std::move(text)), -1);
+  return code;
+}
+
+int reply_ok(int pass_fd = -1, std::optional<StartReport> report = std::nullopt) {
+  Response response;
+  response.ok = true;
+  response.report = std::move(report);
+  return write_response(response, pass_fd);
+}
+
 std::vector<StartedProc> pids_from_files(const Paths& paths) {
   std::vector<StartedProc> started;
   if (const auto pid = read_pid_optional(paths.hostapd_pid())) {
@@ -228,13 +228,17 @@ class TerminalSignalGuard {
   struct sigaction saved_quit_ {};
 };
 
+[[noreturn]] void fail_child(int status_write) {
+  const int err = errno;
+  const ssize_t unused = ::write(status_write, &err, sizeof(err));
+  (void)unused;
+  _exit(127);
+}
+
 [[noreturn]] void exec_helper(char** args, int sock, int err_write, int status_write) {
   if (::dup2(sock, STDIN_FILENO) < 0 || ::dup2(sock, STDOUT_FILENO) < 0 ||
       ::dup2(err_write, STDERR_FILENO) < 0) {
-    const int err = errno;
-    const ssize_t unused = ::write(status_write, &err, sizeof(err));
-    (void)unused;
-    _exit(127);
+    fail_child(status_write);
   }
   if (sock > STDERR_FILENO) {
     ::close(sock);
@@ -250,10 +254,7 @@ class TerminalSignalGuard {
     }
   }
   ::execvp(args[0], args);
-  const int err = errno;
-  const ssize_t unused = ::write(status_write, &err, sizeof(err));
-  (void)unused;
-  _exit(127);
+  fail_child(status_write);
 }
 
 std::string read_all(int fd) {
@@ -302,32 +303,27 @@ Result<void> field_type_error(yyjson_val* root, const char* key, bool (*ok)(yyjs
 
 }
 
+constexpr std::pair<BackendKind, std::string_view> kBackendTokens[] = {
+    {BackendKind::NetworkManager, "network-manager"},
+    {BackendKind::Iwd, "iwd"},
+    {BackendKind::ExistingHostapd, "existing-hostapd"},
+    {BackendKind::DirectHostapd, "direct-hostapd"},
+};
+
 std::string_view backend_token(BackendKind kind) {
-  switch (kind) {
-    case BackendKind::NetworkManager:
-      return "network-manager";
-    case BackendKind::Iwd:
-      return "iwd";
-    case BackendKind::ExistingHostapd:
-      return "existing-hostapd";
-    case BackendKind::DirectHostapd:
-      return "direct-hostapd";
+  for (const auto& [token_kind, text] : kBackendTokens) {
+    if (token_kind == kind) {
+      return text;
+    }
   }
   return "direct-hostapd";
 }
 
 Result<BackendKind> parse_backend_token(std::string_view text) {
-  if (text == "network-manager") {
-    return BackendKind::NetworkManager;
-  }
-  if (text == "iwd") {
-    return BackendKind::Iwd;
-  }
-  if (text == "existing-hostapd") {
-    return BackendKind::ExistingHostapd;
-  }
-  if (text == "direct-hostapd") {
-    return BackendKind::DirectHostapd;
+  for (const auto& [token_kind, token] : kBackendTokens) {
+    if (token == text) {
+      return token_kind;
+    }
   }
   return unexpected_text("The request backend is not valid.");
 }
@@ -585,16 +581,11 @@ Result<void> write_frame(int fd, std::string_view payload, int pass_fd) {
     } else {
       count = ::send(fd, bytes.data() + done, bytes.size() - done, MSG_NOSIGNAL);
     }
-    if (count < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return unexpected_text("The frame write failed. " + errno_text());
+    if (auto step = take_count(count, done, "The frame write failed. ",
+                               "The frame write stopped early.");
+        !step) {
+      return step;
     }
-    if (count == 0) {
-      return unexpected_text("The frame write stopped early.");
-    }
-    done += static_cast<size_t>(count);
   }
   return {};
 }
@@ -725,11 +716,15 @@ Result<HelperPrivilege::Exchange> HelperPrivilege::exchange(const Request& reque
   const bool exec_failed = status_count > 0;
   bool got_frame = false;
   Response response;
-  int passed = -1;
+  FileDescriptor passed;
   if (!exec_failed) {
     if (auto wrote = write_frame(parent_sock.get(), json); wrote) {
       ::shutdown(parent_sock.get(), SHUT_WR);
-      auto frame = read_frame(parent_sock.get(), &passed);
+      int raw = -1;
+      auto frame = read_frame(parent_sock.get(), &raw);
+      if (raw >= 0) {
+        passed = FileDescriptor(raw);
+      }
       if (frame) {
         auto decoded = decode_response(*frame);
         if (decoded) {
@@ -747,22 +742,17 @@ Result<HelperPrivilege::Exchange> HelperPrivilege::exchange(const Request& reque
   }
   const std::string note = trim_copy(read_all(err_read.get()));
   if (exec_failed) {
-    close_fd(&passed);
     return unexpected_text(missing);
   }
   if (got_frame) {
     if (!response.ok) {
-      close_fd(&passed);
       return unexpected_text(response.error);
     }
-    Exchange exchange;
-    exchange.response = std::move(response);
-    if (passed >= 0) {
-      exchange.passed = FileDescriptor(passed);
-    }
-    return exchange;
+    Exchange result;
+    result.response = std::move(response);
+    result.passed = std::move(passed);
+    return result;
   }
-  close_fd(&passed);
   // The helper leaves the terminal session at start. So a terminal signal can only stop pkexec.
   const bool interrupted = WIFSIGNALED(wait_status) &&
                            (WTERMSIG(wait_status) == SIGINT || WTERMSIG(wait_status) == SIGQUIT);
@@ -852,59 +842,40 @@ int run_privileged_helper(Privileged& worker, const Paths& paths) {
   auto frame = read_frame(STDIN_FILENO, &extra);
   close_fd(&extra);
   if (!frame) {
-    (void)write_response(failed_response(frame.error()), -1);
-    return 1;
+    return reply_error(frame.error(), 1);
   }
   auto request = decode_request(*frame);
   if (!request) {
-    (void)write_response(failed_response(request.error()), -1);
-    return 1;
+    return reply_error(request.error(), 1);
   }
   if (request->op == PrivilegeOp::Apply || request->op == PrivilegeOp::Stop) {
     if (auto checked = request->profile.check_settings(); !checked) {
-      (void)write_response(failed_response(checked.error()), -1);
-      return 0;
+      return reply_error(checked.error(), 0);
     }
   }
   if (request->op == PrivilegeOp::Apply) {
     auto report = worker.apply(request->backend, request->profile);
     if (!report) {
-      (void)write_response(failed_response(report.error()), -1);
-      return 0;
+      return reply_error(report.error(), 0);
     }
-    Response response;
-    response.ok = true;
-    response.report = std::move(*report);
-    return write_response(response, -1);
+    return reply_ok(-1, std::move(*report));
   }
   if (request->op == PrivilegeOp::Stop) {
-    StopRequest stop;
-    stop.backend = request->backend;
-    stop.profile = request->profile;
-    stop.private_hostapd = request->private_hostapd;
-    stop.started = pids_from_files(paths);
-    auto stopped = worker.stop(stop);
+    auto stopped = worker.stop(StopRequest{request->backend, request->profile, request->private_hostapd,
+                                           pids_from_files(paths)});
     if (!stopped) {
-      (void)write_response(failed_response(stopped.error()), -1);
-      return 0;
+      return reply_error(stopped.error(), 0);
     }
-    Response response;
-    response.ok = true;
-    return write_response(response, -1);
+    return reply_ok();
   }
   if (!valid_name(request->interface)) {
-    (void)write_response(failed_response("The capture interface name is not valid."), -1);
-    return 0;
+    return reply_error("The capture interface name is not valid.", 0);
   }
   auto socket_fd = worker.open_capture_socket(request->interface);
   if (!socket_fd) {
-    (void)write_response(failed_response(socket_fd.error()), -1);
-    return 0;
+    return reply_error(socket_fd.error(), 0);
   }
-  Response response;
-  response.ok = true;
-  const int code = write_response(response, socket_fd->get());
-  return code;
+  return reply_ok(socket_fd->get());
 }
 
 }

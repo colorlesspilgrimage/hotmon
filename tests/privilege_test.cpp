@@ -345,39 +345,31 @@ TEST(Privilege, InvalidRequestDoesNotCallTheWorker) {
   EXPECT_EQ(worker.apply_calls, 0);
 }
 
-TEST(Privilege, InvalidProfileDoesNotRunCommands) {
+void expect_rejected_profile(const Profile& profile) {
   const auto dir = scratch_dir();
   const auto paths = test_paths(dir);
   ScriptedRunner runner;
   RecordedSignals signals;
   DirectPrivilege worker(runner, signals, paths);
-  Profile profile = sample_profile();
-  profile.ssid.clear();
-  auto empty = run_worker(worker, encode_request(apply_request(profile)), &paths);
+  auto run = run_worker(worker, encode_request(apply_request(profile)), &paths);
   EXPECT_EQ(runner.calls.size(), 0u);
-  ASSERT_TRUE(empty.frame);
-  auto response = decode_response(*empty.frame);
-  ASSERT_TRUE(response);
-  EXPECT_FALSE(response->ok);
-
-  profile = sample_profile();
-  profile.ssid = std::string(33, 'a');
-  auto long_name = run_worker(worker, encode_request(apply_request(profile)), &paths);
-  EXPECT_EQ(runner.calls.size(), 0u);
-  ASSERT_TRUE(long_name.frame);
-  response = decode_response(*long_name.frame);
-  ASSERT_TRUE(response);
-  EXPECT_FALSE(response->ok);
-
-  profile = sample_profile();
-  profile.channel = 0;
-  auto channel = run_worker(worker, encode_request(apply_request(profile)), &paths);
-  EXPECT_EQ(runner.calls.size(), 0u);
-  ASSERT_TRUE(channel.frame);
-  response = decode_response(*channel.frame);
+  ASSERT_TRUE(run.frame);
+  auto response = decode_response(*run.frame);
   ASSERT_TRUE(response);
   EXPECT_FALSE(response->ok);
   std::filesystem::remove_all(dir);
+}
+
+TEST(Privilege, InvalidProfileDoesNotRunCommands) {
+  Profile profile = sample_profile();
+  profile.ssid.clear();
+  expect_rejected_profile(profile);
+  profile = sample_profile();
+  profile.ssid = std::string(33, 'a');
+  expect_rejected_profile(profile);
+  profile = sample_profile();
+  profile.channel = 0;
+  expect_rejected_profile(profile);
 }
 
 TEST(Privilege, HelperStopUsesPidFilesNotRequestPids) {
@@ -431,25 +423,23 @@ TEST(Privilege, Exit126CancelsAndResumes) {
   EXPECT_LT(suspend_at, resume_at);
 }
 
-TEST(Privilege, Exit127ReportsAuthorizationFailure) {
-  HelperPrivilege helper({"/bin/sh", "-c", "exit 127"}, {});
+void expect_apply_text(std::vector<std::string> argv, std::string_view needle) {
+  HelperPrivilege helper(std::move(argv), {});
   auto error = helper.apply(BackendKind::DirectHostapd, sample_profile());
   ASSERT_FALSE(error);
-  EXPECT_NE(error.error().find("Authorization failed"), std::string::npos);
+  EXPECT_NE(error.error().find(needle), std::string::npos);
+}
+
+TEST(Privilege, Exit127ReportsAuthorizationFailure) {
+  expect_apply_text({"/bin/sh", "-c", "exit 127"}, "Authorization failed");
 }
 
 TEST(Privilege, Exit127KeepsTheStderrLine) {
-  HelperPrivilege helper({"/bin/sh", "-c", "echo agent-refused >&2; exit 127"}, {});
-  auto error = helper.apply(BackendKind::DirectHostapd, sample_profile());
-  ASSERT_FALSE(error);
-  EXPECT_NE(error.error().find("agent-refused"), std::string::npos);
+  expect_apply_text({"/bin/sh", "-c", "echo agent-refused >&2; exit 127"}, "agent-refused");
 }
 
 TEST(Privilege, MissingProgramMentionsPkexec) {
-  HelperPrivilege helper({"definitely-not-a-program"}, {});
-  auto error = helper.apply(BackendKind::DirectHostapd, sample_profile());
-  ASSERT_FALSE(error);
-  EXPECT_NE(error.error().find("pkexec"), std::string::npos);
+  expect_apply_text({"definitely-not-a-program"}, "pkexec");
 }
 
 TEST(Privilege, HelperScriptCanReturnAStartedList) {
