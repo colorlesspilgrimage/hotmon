@@ -80,18 +80,24 @@ Key map_key(wint_t ch, bool function_key) {
   return key;
 }
 
-void open_capture(App& app) {
+void show_wait(Terminal& terminal, App& app) {
+  app.notice = "Waiting for authorization...";
+  terminal.draw(app);
+}
+
+void open_capture(App& app, Privileged& privileged, Terminal& terminal) {
   const auto iface = app.capture.armed_interface();
   if (!iface) {
     app.notice = "Capture is not confirmed.";
     return;
   }
-  auto source = LocalCapture::open(*iface);
-  if (!source) {
-    app.capture_open_failed(source.error());
+  show_wait(terminal, app);
+  auto fd = privileged.open_capture_socket(*iface);
+  if (!fd) {
+    app.capture_open_failed(fd.error());
     return;
   }
-  auto pointer = std::make_unique<LocalCapture>(std::move(*source));
+  auto pointer = std::make_unique<LocalCapture>(LocalCapture::from_fd(std::move(*fd)));
   if (auto attached = app.capture.attach(std::move(pointer)); !attached) {
     app.notice = attached.error();
   } else {
@@ -187,10 +193,8 @@ int Terminal::read_key(App& app, Key& key) {
   return OK;
 }
 
-int run_ui(App& app) {
+int run_ui(App& app, Privileged& privileged) {
   SystemRunner runner;
-  SystemSignals signals;
-  const Paths paths = Paths::system();
   Terminal terminal;
   while (true) {
     terminal.draw(app);
@@ -208,22 +212,44 @@ int run_ui(App& app) {
       case Step::Quit:
         return 0;
       case Step::Apply:
-        if (auto applied = app.apply_hotspot(runner, signals, paths); !applied) {
+        show_wait(terminal, app);
+        if (auto applied = app.apply_hotspot(privileged); !applied) {
           app.notice = applied.error();
         }
         break;
       case Step::StopHotspot:
-        if (auto stopped = app.stop_hotspot(runner, signals, paths); !stopped) {
+        show_wait(terminal, app);
+        if (auto stopped = app.stop_hotspot(privileged); !stopped) {
           app.notice = stopped.error();
         }
         break;
       case Step::OpenCapture:
-        open_capture(app);
+        open_capture(app, privileged, terminal);
         break;
       case Step::Continue:
         break;
     }
   }
+}
+
+TerminalHooks terminal_hooks() {
+  return TerminalHooks{
+      [] {
+        if (active_terminal == nullptr) {
+          return;
+        }
+        def_prog_mode();
+        endwin();
+      },
+      [] {
+        if (active_terminal == nullptr) {
+          return;
+        }
+        reset_prog_mode();
+        clearok(stdscr, TRUE);
+        refresh();
+      },
+  };
 }
 
 }

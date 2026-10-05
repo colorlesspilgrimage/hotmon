@@ -93,6 +93,7 @@ struct Wizard {
   static Wizard from_profile(const Profile& profile, const HostFacts& facts);
 
   std::pair<size_t, size_t> position() const;
+  bool open_security() const;
   bool open_upstream_risk() const;
   std::string hint() const;
   std::vector<FieldLine> field_lines() const;

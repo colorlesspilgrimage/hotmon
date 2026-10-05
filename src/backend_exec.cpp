@@ -137,7 +137,6 @@ Result<void> write_sysctl(const std::filesystem::path& path, std::string_view va
 }
 
 struct InstalledFiles {
-  std::vector<std::filesystem::path> temporary;
   std::vector<std::filesystem::path> failure_secrets;
   bool replaced_system = false;
   bool created_system = false;
@@ -223,9 +222,6 @@ Result<void> install_files_into(const ApplyPlan& plan, const Paths& paths,
     }
     if (auto written = write_text(file.path, file.contents, file.mode); !written) {
       return written;
-    }
-    if (file.temporary) {
-      installed.temporary.push_back(file.path);
     }
     if (file.remove_on_failure) {
       installed.failure_secrets.push_back(file.path);
@@ -361,10 +357,6 @@ Result<void> rollback(const InstalledFiles& installed, Runner& runner, ProcessCo
     std::error_code error;
     std::filesystem::remove(path, error);
   }
-  for (const auto& path : installed.temporary) {
-    std::error_code error;
-    std::filesystem::remove(path, error);
-  }
   if (cleanup_error) {
     return unexpected_text(*cleanup_error);
   }
@@ -393,6 +385,9 @@ Result<std::string> SystemRunner::run(const PlannedCommand& command) {
     return unexpected_text("The program " + command.program + " did not start. " + output.error());
   }
   if (output->status == 0) {
+    if (!command.stderr_failure.empty() && output->err.find(command.stderr_failure) != std::string::npos) {
+      return unexpected_text(trim_copy(output->err));
+    }
     return trim_copy(output->out);
   }
   std::string detail = trim_copy(output->err);
@@ -728,10 +723,6 @@ Result<StartReport> execute_plan(const ApplyPlan& plan, Runner& runner, ProcessC
     }
     note_started(command, started);
   }
-  for (const auto& path : installed.temporary) {
-    std::error_code error;
-    std::filesystem::remove(path, error);
-  }
   if (installed.previous_nft) {
     std::error_code error;
     std::filesystem::remove(*installed.previous_nft, error);
@@ -741,6 +732,44 @@ Result<StartReport> execute_plan(const ApplyPlan& plan, Runner& runner, ProcessC
     std::filesystem::remove(*installed.attempt_restore, error);
   }
   return StartReport{std::move(started), private_hostapd};
+}
+
+Result<void> teardown_hotspot(BackendKind backend, const Profile& profile, bool private_hostapd,
+                              const std::vector<StartedProc>& started, Runner& runner,
+                              ProcessControl& signals, const Paths& paths) {
+  auto commands = plan_stop(backend, profile);
+  if (private_hostapd) {
+    std::erase_if(commands, [](const PlannedCommand& command) {
+      return command.program == "systemctl";
+    });
+  }
+  if (auto stopped = run_stop_commands(commands, runner); !stopped) {
+    return unexpected_text(stopped.error());
+  }
+  if (backend != BackendKind::NetworkManager && backend != BackendKind::Iwd) {
+    if (auto stopped = stop_started(signals, started); !stopped) {
+      return unexpected_text(stopped.error());
+    }
+  }
+  if (auto deleted = run_nft_delete(runner); !deleted) {
+    return unexpected_text(deleted.error());
+  }
+  clear_nft_live(paths);
+  if (auto restored = restore_forwarding(paths); !restored) {
+    return unexpected_text(restored.error());
+  }
+  if (auto restored = restore_hostapd_backup(paths); !restored) {
+    return unexpected_text(restored.error());
+  }
+  std::error_code error;
+  std::filesystem::remove(paths.hostapd_pid(), error);
+  std::filesystem::remove(paths.dnsmasq_pid(), error);
+  const auto iwd_profile = paths.iwd_ap_dir / (profile.ssid + ".ap");
+  if (auto retired = retire_iwd_profile(iwd_profile); !retired) {
+    return unexpected_text(retired.error());
+  }
+  std::filesystem::remove(paths.nm_secret(), error);
+  return {};
 }
 
 }

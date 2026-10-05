@@ -29,7 +29,7 @@ void assert_no_secret_args(const ApplyPlan& plan, const std::string& secret) {
 }
 
 Paths run_paths(const std::filesystem::path& dir) {
-  return Paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc"};
+  return Paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
 }
 
 TEST(Backend, SelectionFollowsTheServiceOrder) {
@@ -110,7 +110,7 @@ TEST(Backend, OpenHostapdConfigHasNoPassphrase) {
 
 TEST(Backend, NetworkManagerPlanUsesNmcliOnly) {
   const auto dir = scratch_dir();
-  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
   auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
   ASSERT_TRUE(plan);
   EXPECT_TRUE(std::all_of(plan->commands.begin(), plan->commands.end(),
@@ -141,7 +141,7 @@ TEST(Backend, IwdPlanWritesTheAccessPointProfile) {
 
 TEST(Backend, RejectionIsAClearError) {
   const auto dir = scratch_dir();
-  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
   auto profile = sample_profile();
   profile.channel = 2;
   profile.band = Band::Band5;
@@ -150,8 +150,7 @@ TEST(Backend, RejectionIsAClearError) {
   EXPECT_NE(error.error().find("The backend rejected the setting."), std::string::npos);
   auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
   ASSERT_TRUE(plan);
-  auto runner = ScriptedRunner::with_results(
-      {unexpected_text("not found"), unexpected_text("channel is not supported")});
+  auto runner = ScriptedRunner::with_results({std::string(), unexpected_text("channel is not supported")});
   RecordedSignals signals;
   auto failed = execute_plan(*plan, runner, signals, paths);
   ASSERT_FALSE(failed);
@@ -164,7 +163,7 @@ TEST(Backend, RejectionIsAClearError) {
 
 TEST(Backend, ExistingHostapdUsesSystemctl) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);
   ASSERT_TRUE(plan);
   EXPECT_TRUE(std::any_of(plan->commands.begin(), plan->commands.end(), [](const auto& command) {
@@ -278,7 +277,7 @@ TEST(Backend, ForwardingChangesOnlyTheHotspotAndUpstream) {
 
 TEST(Backend, FailedStartRemovesTheFirewallAndTheDaemon) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc", dir / "nm"};
   std::filesystem::create_directories(dir);
   std::ofstream(paths.hostapd_config) << "leave-this\n";
   auto plan = plan_apply(BackendKind::DirectHostapd, sample_profile(), paths);
@@ -327,7 +326,7 @@ TEST(Backend, StopDoesNotSignalAForeignProcess) {
 
 TEST(Backend, HostapdSystemFileIsRestoredFromTheBackup) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);
@@ -350,7 +349,7 @@ TEST(Backend, HostapdSystemFileIsRestoredFromTheBackup) {
 
 TEST(Backend, MissingBackupDoesNotChangeTheSystemFile) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   std::filesystem::create_directories(paths.state_dir);
@@ -379,22 +378,47 @@ TEST(Backend, DaemonNameAcceptsOnlyHostapdAndDnsmasq) {
   EXPECT_FALSE(daemon_name(std::nullopt, std::nullopt));
 }
 
-TEST(Backend, NmSecretFileIsRemovedAfterTheCall) {
+TEST(Backend, NmKeyfileStaysWhereNetworkManagerLoadsIt) {
+  EXPECT_EQ(Paths::system().nm_secret().parent_path(), "/run/NetworkManager/system-connections");
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "h.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
   auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
   ASSERT_TRUE(plan);
   ModeCheck runner;
   RecordedSignals signals;
   ASSERT_TRUE(execute_plan(*plan, runner, signals, paths));
   EXPECT_TRUE(runner.saw_private_secret);
-  EXPECT_FALSE(std::filesystem::exists(paths.nm_secret()));
+  EXPECT_EQ(mode_bits(paths.nm_secret()), 0600u);
   std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, NmRestartDoesNotDeleteTheNewKeyfile) {
+  const auto dir = scratch_dir();
+  Paths paths{dir / "run", dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
+  ASSERT_TRUE(plan);
+  // NetworkManager removes the backing file on delete. The old profile uses the same path.
+  EXPECT_TRUE(std::none_of(plan->commands.begin(), plan->commands.end(), [](const auto& command) {
+    return std::find(command.args.begin(), command.args.end(), "delete") != command.args.end();
+  }));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, StderrMarkerFailsACommandThatExitsZero) {
+  SystemRunner runner;
+  const auto quiet_failure =
+      PlannedCommand::make("sh", {"-c", "echo \"Could not load file '/tmp/x'\" >&2"});
+  EXPECT_TRUE(runner.run(quiet_failure));
+  auto failed = runner.run(quiet_failure.failing_on_stderr("Could not load file"));
+  ASSERT_FALSE(failed);
+  EXPECT_EQ(failed.error(), "Could not load file '/tmp/x'");
+  EXPECT_TRUE(runner.run(PlannedCommand::make("sh", {"-c", "echo warning >&2"})
+                             .failing_on_stderr("Could not load file")));
 }
 
 TEST(Backend, FailedFileInstallRemovesTheSecret) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc", dir / "nm"};
   std::filesystem::create_directories(paths.state_dir);
   std::filesystem::create_directories(paths.nft_path());
   auto plan = plan_apply(BackendKind::DirectHostapd, sample_profile(), paths);
@@ -416,7 +440,7 @@ TEST(Backend, FailedFileInstallRemovesTheSecret) {
 
 TEST(Backend, FailedFileInstallRestoresTheSystemFile) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   std::filesystem::create_directories(paths.state_dir);
@@ -438,7 +462,7 @@ TEST(Backend, FailedFileInstallRestoresTheSystemFile) {
 
 TEST(Backend, MissingSystemFileUsesThePrivateFile) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);
   ASSERT_TRUE(plan);
@@ -608,7 +632,7 @@ TEST(Backend, FailedReapplyBeforeNftKeepsTheLiveRulesFile) {
 
 TEST(Backend, SecondApplyKeepsTheOriginalHostapdBackup) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);
@@ -645,6 +669,89 @@ TEST(Backend, PidFileMustHoldOnlyOnePid) {
   EXPECT_FALSE(pid_from("0\n"));
   EXPECT_FALSE(pid_from("99999999999\n"));
   EXPECT_FALSE(pid_from("\n"));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownSignalsTheStartedDaemon) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  std::filesystem::create_directories(paths.state_dir);
+  std::ofstream(paths.hostapd_pid()) << "42\n";
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  signals.names.push_back({42, "hostapd"});
+  ASSERT_TRUE(teardown_hotspot(BackendKind::DirectHostapd, sample_profile(), false,
+                               {StartedProc{42, "hostapd"}}, runner, signals, paths));
+  EXPECT_EQ(signals.pids, std::vector<int>({42}));
+  EXPECT_TRUE(std::any_of(runner.calls.begin(), runner.calls.end(),
+                          [](const auto& command) { return command.program == "nft"; }));
+  EXPECT_FALSE(std::filesystem::exists(paths.hostapd_pid()));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownReportsALiveDaemon) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  signals.names.push_back({8, "dnsmasq"});
+  signals.stay_alive = true;
+  auto error = teardown_hotspot(BackendKind::DirectHostapd, sample_profile(), false,
+                                {StartedProc{8, "dnsmasq"}}, runner, signals, paths);
+  ASSERT_FALSE(error);
+  EXPECT_NE(error.error().find("not stopped"), std::string::npos);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownRemovesTheManagerProfile) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  signals.names.push_back({42, "hostapd"});
+  ASSERT_TRUE(teardown_hotspot(BackendKind::NetworkManager, sample_profile(), false,
+                               {StartedProc{42, "hostapd"}}, runner, signals, paths));
+  EXPECT_TRUE(signals.pids.empty());
+  EXPECT_TRUE(std::any_of(runner.calls.begin(), runner.calls.end(), [](const auto& command) {
+    return command.program == "nmcli" &&
+           std::find(command.args.begin(), command.args.end(), "delete") != command.args.end();
+  }));
+  const auto profile = sample_profile();
+  const auto iwd_path = paths.iwd_ap_dir / (profile.ssid + ".ap");
+  std::filesystem::create_directories(paths.iwd_ap_dir);
+  std::ofstream(iwd_path) << "Passphrase=correct-horse\n";
+  ScriptedRunner iwd_runner;
+  ASSERT_TRUE(teardown_hotspot(BackendKind::Iwd, profile, false, {}, iwd_runner, signals, paths));
+  EXPECT_FALSE(std::filesystem::exists(iwd_path));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownSkipsSystemctlForPrivateHostapd) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  ASSERT_TRUE(teardown_hotspot(BackendKind::ExistingHostapd, sample_profile(), true, {}, runner,
+                               signals, paths));
+  EXPECT_FALSE(std::any_of(runner.calls.begin(), runner.calls.end(),
+                           [](const auto& command) { return command.program == "systemctl"; }));
+  ScriptedRunner service;
+  ASSERT_TRUE(teardown_hotspot(BackendKind::ExistingHostapd, sample_profile(), false, {}, service,
+                               signals, paths));
+  EXPECT_TRUE(std::any_of(service.calls.begin(), service.calls.end(),
+                          [](const auto& command) { return command.program == "systemctl"; }));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownReportsARejectedStop) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  auto runner = ScriptedRunner::with_results({unexpected_text("refused")});
+  RecordedSignals signals;
+  auto error = teardown_hotspot(BackendKind::NetworkManager, sample_profile(), false, {}, runner,
+                                signals, paths);
+  ASSERT_FALSE(error);
+  EXPECT_NE(error.error().find("rejected the stop"), std::string::npos);
   std::filesystem::remove_all(dir);
 }
 

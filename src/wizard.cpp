@@ -296,12 +296,19 @@ std::pair<size_t, size_t> Wizard::position() const {
       number = 8;
       break;
   }
+  if (open_security()) {
+    // The passphrase page is skipped, so later pages move up by one.
+    return {number > 4 ? number - 1 : number, 7};
+  }
   return {number, 8};
 }
 
+bool Wizard::open_security() const {
+  return !security.empty() && security.current().value == "open";
+}
+
 bool Wizard::open_upstream_risk() const {
-  return !security.empty() && security.current().value == "open" && !upstream.empty() &&
-         upstream.current().value != "none";
+  return open_security() && !upstream.empty() && upstream.current().value != "none";
 }
 
 std::string Wizard::hint() const {
@@ -313,7 +320,7 @@ std::string Wizard::hint() const {
     case Page::Security:
       return "Choose Open, WPA2, or WPA3.";
     case Page::Passphrase:
-      return "Enter the passphrase. Use 8 to 63 characters. Leave this empty for open.";
+      return "Enter the passphrase. Use 8 to 63 characters.";
     case Page::Upstream:
       return "Choose the upstream interface, or none.";
     case Page::BandChannel:
@@ -592,6 +599,9 @@ Result<void> Wizard::next(const HostFacts& facts) {
     page = Page::Ssid;
   } else if (page == Page::Ssid) {
     page = Page::Security;
+  } else if (page == Page::Security && open_security()) {
+    passphrase.clear();
+    page = Page::Upstream;
   } else if (page == Page::Security) {
     page = Page::Passphrase;
   } else if (page == Page::Passphrase) {
@@ -619,7 +629,7 @@ void Wizard::back() {
       page = Page::Security;
       break;
     case Page::Upstream:
-      page = Page::Passphrase;
+      page = open_security() ? Page::Security : Page::Passphrase;
       break;
     case Page::BandChannel:
       page = Page::Upstream;

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,12 @@ enum class BackendKind { NetworkManager, Iwd, ExistingHostapd, DirectHostapd };
 
 const char* label(BackendKind kind);
 inline constexpr const char* DIRECT_TOOLS[] = {"hostapd", "dnsmasq", "nftables"};
+
+// Looks in the folders where NetworkManager looks for its helper programs.
+bool system_program_installed(std::string_view name);
+// NetworkManager runs dnsmasq itself for a shared (DHCP) hotspot and fails late without it.
+Result<void> check_backend_tools(BackendKind kind, const Profile& profile,
+                                 const std::function<bool(std::string_view)>& installed);
 
 struct ProbeFacts {
   bool network_manager_active = false;
@@ -30,6 +37,8 @@ struct Paths {
   std::filesystem::path hostapd_config;
   std::filesystem::path iwd_ap_dir;
   std::filesystem::path proc_root;
+  // NetworkManager loads keyfiles only from its own folders.
+  std::filesystem::path nm_connection_dir;
 
   static Paths system();
   std::filesystem::path hostapd_pid() const;
@@ -52,9 +61,12 @@ struct PlannedCommand {
   std::string program;
   std::vector<std::string> args;
   bool optional = false;
+  // Some tools exit 0 after a failure. Text here on stderr marks the command as failed.
+  std::string stderr_failure;
 
   static PlannedCommand make(std::string program, std::vector<std::string> args);
   PlannedCommand optional_command() const;
+  PlannedCommand failing_on_stderr(std::string marker) const;
   bool operator==(const PlannedCommand&) const = default;
 };
 
@@ -62,7 +74,6 @@ struct PlanFile {
   std::filesystem::path path;
   std::string contents;
   uint32_t mode = 0644;
-  bool temporary = false;
   bool remove_on_failure = false;
   bool lock_parent = false;
 };

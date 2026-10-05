@@ -153,19 +153,27 @@ TEST(Wizard, SecurityBoxIgnoresTypedText) {
   EXPECT_EQ(wizard.security.current().value, "wpa2");
 }
 
-TEST(Wizard, OpenSecurityAllowsOnlyAnEmptyPassphrase) {
+TEST(Wizard, OpenSecuritySkipsThePassphrasePage) {
   auto facts = facts_with(sample_interfaces());
-  auto wizard = Wizard::make(facts);
+  auto wizard = Wizard::from_profile(sample_profile(), facts);
   wizard.page = Page::Security;
   wizard.security.select_value("open");
   ASSERT_TRUE(wizard.next(facts));
-  ASSERT_TRUE(wizard.next(facts));
   EXPECT_EQ(wizard.page, Page::Upstream);
-  wizard.page = Page::Passphrase;
-  wizard.passphrase = "secret";
-  auto error = wizard.next(facts);
-  ASSERT_FALSE(error);
-  EXPECT_NE(error.error().find("An open network does not use a passphrase."), std::string::npos);
+  EXPECT_TRUE(wizard.passphrase.empty());
+  EXPECT_EQ(wizard.position(), (std::pair<size_t, size_t>{4, 7}));
+  wizard.page = Page::Review;
+  EXPECT_EQ(wizard.position(), (std::pair<size_t, size_t>{7, 7}));
+  wizard.page = Page::Upstream;
+  wizard.back();
+  EXPECT_EQ(wizard.page, Page::Security);
+  wizard.security.select_value("wpa2");
+  ASSERT_TRUE(wizard.next(facts));
+  EXPECT_EQ(wizard.page, Page::Passphrase);
+  EXPECT_EQ(wizard.position(), (std::pair<size_t, size_t>{4, 8}));
+  wizard.page = Page::Upstream;
+  wizard.back();
+  EXPECT_EQ(wizard.page, Page::Passphrase);
 }
 
 TEST(Wizard, PassphrasePageMasksAndRejectsShellCharacters) {

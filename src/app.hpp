@@ -1,7 +1,7 @@
 #pragma once
 
 #include "backend.hpp"
-#include "backend_exec.hpp"
+#include "privilege.hpp"
 #include "capture.hpp"
 #include "iface.hpp"
 #include "monitor.hpp"
@@ -48,6 +48,7 @@ struct App {
   CaptureControl capture;
   std::vector<IfaceInfo> interfaces;
   HostFacts facts;
+  std::function<bool(std::string_view)> program_installed = system_program_installed;
   std::string notice;
   std::filesystem::path profile_path;
   bool running = false;
@@ -63,8 +64,8 @@ struct App {
                         std::filesystem::path profile_path, std::optional<Profile> loaded);
   bool needs_open_warning() const;
   Step on_key(const Key& key);
-  Result<void> apply_hotspot(Runner& runner, ProcessControl& signals, const Paths& paths);
-  Result<void> stop_hotspot(Runner& runner, ProcessControl& signals, const Paths& paths);
+  Result<void> apply_hotspot(Privileged& privileged);
+  Result<void> stop_hotspot(Privileged& privileged);
   Result<void> refresh_clients(Runner& runner);
   void tick(Runner& runner);
   void capture_open_failed(std::string message);

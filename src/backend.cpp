@@ -1,3 +1,5 @@
+#include <unistd.h>
+
 #include <format>
 #include "backend.hpp"
 
@@ -18,12 +20,6 @@ PlanFile plain_file(std::filesystem::path path, std::string contents, uint32_t m
   return file;
 }
 
-PlanFile temporary_file(PlanFile file) {
-  file.temporary = true;
-  file.remove_on_failure = true;
-  return file;
-}
-
 PlanFile lock_parent(PlanFile file) {
   file.lock_parent = true;
   return file;
@@ -39,13 +35,13 @@ std::string gateway_cidr(const Profile& profile) {
 }
 
 ApplyPlan nm_plan(const Profile& profile, const Paths& paths) {
-  const auto secret = paths.nm_secret();
+  const auto keyfile = paths.nm_secret();
   ApplyPlan plan;
-  plan.files.push_back(temporary_file(plain_file(secret, nm_keyfile(profile), 0600)));
-  plan.commands.push_back(
-      PlannedCommand::make("nmcli", {"connection", "delete", "hotmon"}).optional_command());
-  plan.commands.push_back(
-      PlannedCommand::make("nmcli", {"connection", "load", secret.string()}));
+  // The keyfile stays while the hotspot runs. `nmcli connection delete` removes it at stop.
+  // A delete before the load would remove the new file, because the old profile used this path.
+  plan.files.push_back(plain_file(keyfile, nm_keyfile(profile), 0600));
+  plan.commands.push_back(PlannedCommand::make("nmcli", {"connection", "load", keyfile.string()})
+                              .failing_on_stderr("Could not load file"));
   plan.commands.push_back(PlannedCommand::make("nmcli", {"connection", "up", "hotmon"}));
   plan.tools.push_back("NetworkManager");
   return plan;
@@ -126,6 +122,26 @@ BackendKind select_backend(const ProbeFacts& facts) {
   return BackendKind::DirectHostapd;
 }
 
+bool system_program_installed(std::string_view name) {
+  for (const char* dir : {"/usr/local/sbin", "/usr/sbin", "/usr/local/bin", "/usr/bin", "/sbin", "/bin"}) {
+    const auto path = std::filesystem::path(dir) / std::string(name);
+    if (::access(path.c_str(), X_OK) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Result<void> check_backend_tools(BackendKind kind, const Profile& profile,
+                                 const std::function<bool(std::string_view)>& installed) {
+  if (kind == BackendKind::NetworkManager && profile.dhcp_enabled && !installed("dnsmasq")) {
+    return unexpected_text(
+        "NetworkManager needs dnsmasq to give addresses to devices. Install the dnsmasq package, "
+        "or turn DHCP off in advanced setup.");
+  }
+  return {};
+}
+
 bool service_active(std::string_view unit) {
   const auto result = run_capture({"systemctl", "is-active", "--quiet", std::string(unit)});
   return result && result->status == 0;
@@ -143,7 +159,8 @@ ProbeFacts probe_system() {
 }
 
 Paths Paths::system() {
-  return Paths{"/run/hotmon", "/etc/hostapd/hostapd.conf", "/var/lib/iwd/ap", "/proc"};
+  return Paths{"/run/hotmon", "/etc/hostapd/hostapd.conf", "/var/lib/iwd/ap", "/proc",
+               "/run/NetworkManager/system-connections"};
 }
 
 std::filesystem::path Paths::hostapd_pid() const { return state_dir / "hostapd.pid"; }
@@ -161,7 +178,7 @@ std::filesystem::path Paths::dnsmasq_dir() const {
 std::filesystem::path Paths::dnsmasq_conf() const { return dnsmasq_dir() / "dnsmasq.conf"; }
 std::filesystem::path Paths::dnsmasq_lease() const { return dnsmasq_dir() / "leases"; }
 std::filesystem::path Paths::nft_path() const { return state_dir / "hotmon.nft"; }
-std::filesystem::path Paths::nm_secret() const { return state_dir / "hotmon.nmconnection"; }
+std::filesystem::path Paths::nm_secret() const { return nm_connection_dir / "hotmon.nmconnection"; }
 std::filesystem::path Paths::hostapd_backup() const { return state_dir / "hostapd.conf.bak"; }
 std::filesystem::path Paths::created_marker() const { return state_dir / "hostapd.created"; }
 std::filesystem::path Paths::forwarding_record() const { return state_dir / "forwarding.restore"; }
@@ -173,12 +190,18 @@ void clear_nft_live(const Paths& paths) {
 }
 
 PlannedCommand PlannedCommand::make(std::string program, std::vector<std::string> args) {
-  return PlannedCommand{std::move(program), std::move(args), false};
+  return PlannedCommand{std::move(program), std::move(args), false, {}};
 }
 
 PlannedCommand PlannedCommand::optional_command() const {
   PlannedCommand copy = *this;
   copy.optional = true;
+  return copy;
+}
+
+PlannedCommand PlannedCommand::failing_on_stderr(std::string marker) const {
+  PlannedCommand copy = *this;
+  copy.stderr_failure = std::move(marker);
   return copy;
 }
 
