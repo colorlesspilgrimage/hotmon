@@ -271,7 +271,7 @@ Result<void> field_type_error(yyjson_val* root, const char* key, bool (*ok)(yyjs
   return {};
 }
 
-}  // namespace
+}
 
 std::string_view backend_token(BackendKind kind) {
   switch (kind) {

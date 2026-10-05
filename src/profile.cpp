@@ -68,8 +68,8 @@ bool has_disallowed_ssid_char(std::string_view ssid) {
   return false;
 }
 
-// Write a file in an open folder. The program often runs as root, so it does not follow links.
-// It does not truncate a file that has a second hard link.
+// Do not follow a link. A link can point outside this folder.
+// Do not truncate a file that has a second hard link.
 Result<void> write_mode(int dir_fd, const std::filesystem::path& path, std::string_view contents,
                         mode_t mode) {
   const std::string name = path.filename().string();
