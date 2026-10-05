@@ -11,6 +11,9 @@
 #include <string>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
 namespace hotmon {
 
 Profile sample_profile();
@@ -60,6 +63,19 @@ class FakeSource : public FrameSource {
   int reads = 0;
   Result<std::optional<std::vector<uint8_t>>> try_recv() override;
 };
+
+// The 3DS connection-test request. Tests share this text.
+inline constexpr std::string_view FAKEMII_CONNTEST_REQUEST =
+    "GET http://conntest.nintendowifi.net/ HTTP/1.1\r\nHost: conntest.nintendowifi.net\r\n\r\n";
+
+// Build an IPv4 socket address. The address is in host byte order.
+inline sockaddr_in ipv4_endpoint(uint32_t host_order_ip, uint16_t port) {
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_port = htons(port);
+  address.sin_addr.s_addr = htonl(host_order_ip);
+  return address;
+}
 
 // Connect a blocking TCP client to 127.0.0.1. Return -1 on failure.
 int loopback_connect(uint16_t port);

@@ -161,10 +161,7 @@ int loopback_connect(uint16_t port) {
   if (fd < 0) {
     return -1;
   }
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  sockaddr_in address = ipv4_endpoint(INADDR_LOOPBACK, port);
   if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
     ::close(fd);
     return -1;
