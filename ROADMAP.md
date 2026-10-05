@@ -1,6 +1,11 @@
 # Roadmap
 
-No planned items.
+## Planned
+
+### FakeMii integration
+
+Fake the Nintendo 3DS connection test on the hotspot so a 3DS can join without real internet (for FTP, netloader, Input Redirection, and similar local tools).
+Reference: https://github.com/Lectem/FakeMii
 
 ## Done
 
