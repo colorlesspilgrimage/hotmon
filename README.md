@@ -8,6 +8,7 @@ hotmon is a terminal program for running a Wi-Fi hotspot on Linux. You set the h
 - Picks the band, channel, address range and DHCP range for you. You can change them on an advanced page if you want to.
 - Starts and stops the hotspot using whatever your system already has.
 - Shows status and live traffic counters for the hotspot interface.
+- Lists connected devices on the status view with current and total bandwidth, up and down.
 - Can capture packets on the hotspot interface.
 - Saves your settings so the next run starts from them.
 
@@ -52,6 +53,18 @@ You move through these pages: interface, SSID, security, passphrase, upstream, b
 | `z` | Stop the capture |
 | `k` | Stop the hotspot |
 | `q` | Quit |
+
+
+## Status view
+
+The status view lists each connected device.
+The columns are Device, Address, Down, Up, Total down, and Total up.
+Down is data sent to the device.
+Up is data received from the device.
+The panel title shows the device count and the total speeds.
+The UI uses the whole terminal.
+A UTF-8 locale uses Unicode lines.
+Other locales use plain `+`, `-`, and `|` lines.
 
 ## Packet capture
 

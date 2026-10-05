@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <deque>
 #include <map>
 #include <optional>
@@ -34,20 +35,35 @@ struct ClientTraffic {
   std::optional<std::string> ip;
   uint64_t rx_bytes = 0;
   uint64_t tx_bytes = 0;
+  uint64_t rx_rate = 0;
+  uint64_t tx_rate = 0;
   Series graph{40};
 };
 
 class MonitorState {
  public:
   MonitorState();
-  void update(const std::vector<ClientSnapshot>& clients);
+  void update(const std::vector<ClientSnapshot>& clients,
+              std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
   std::vector<ClientTraffic> clients() const;
   std::vector<uint64_t> total_samples() const;
+  uint64_t total_rx_rate() const;
+  uint64_t total_tx_rate() const;
   void clear();
 
  private:
-  std::map<std::string, ClientTraffic> clients_;
+  struct Tracked {
+    ClientTraffic traffic;
+    uint64_t ref_rx = 0;
+    uint64_t ref_tx = 0;
+    std::chrono::steady_clock::time_point ref_time{};
+    bool has_ref = false;
+  };
+
+  std::map<std::string, Tracked> clients_;
   Series total_;
+
+  uint64_t total_rate(uint64_t ClientTraffic::*field) const;
 };
 
 std::vector<ClientSnapshot> parse_station_dump(std::string_view text);
