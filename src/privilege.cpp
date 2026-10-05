@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <climits>
+#include <csignal>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -80,6 +81,13 @@ Result<void> write_all(int fd, const char* data, size_t size) {
   return {};
 }
 
+void close_fd(int* fd) {
+  if (fd != nullptr && *fd >= 0) {
+    ::close(*fd);
+    *fd = -1;
+  }
+}
+
 Result<void> read_some(int fd, char* data, size_t size, size_t& done, int* received_fd, bool& want_fd) {
   if (size == 0) {
     return {};
@@ -107,9 +115,6 @@ Result<void> read_some(int fd, char* data, size_t size, size_t& done, int* recei
     if (count == 0) {
       return unexpected_text("The frame ended early.");
     }
-    if ((message.msg_flags & MSG_CTRUNC) != 0) {
-      return unexpected_text("The frame control data was truncated.");
-    }
     for (cmsghdr* header = CMSG_FIRSTHDR(&message); header != nullptr;
          header = CMSG_NXTHDR(&message, header)) {
       if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS) {
@@ -125,6 +130,11 @@ Result<void> read_some(int fd, char* data, size_t size, size_t& done, int* recei
           ::close(fds[index]);
         }
       }
+    }
+    // Close the descriptors that arrived before the error, so that none of them leak.
+    if ((message.msg_flags & MSG_CTRUNC) != 0) {
+      close_fd(received_fd);
+      return unexpected_text("The frame control data was truncated.");
     }
     done += static_cast<size_t>(count);
     return {};
@@ -152,13 +162,6 @@ Result<void> read_exact(int fd, char* data, size_t size, int* received_fd) {
     }
   }
   return {};
-}
-
-void close_fd(int* fd) {
-  if (fd != nullptr && *fd >= 0) {
-    ::close(*fd);
-    *fd = -1;
-  }
 }
 
 std::string with_note(std::string base, const std::string& note) {
@@ -198,6 +201,32 @@ std::vector<StartedProc> pids_from_files(const Paths& paths) {
   }
   return started;
 }
+
+// Ctrl+C or Ctrl+\ at the text prompt of pkexec sends a signal to all of the terminal group.
+// hotmon ignores these signals while the helper runs. Then a cancel does not stop hotmon.
+class TerminalSignalGuard {
+ public:
+  TerminalSignalGuard() {
+    struct sigaction ignore {};
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    ::sigaction(SIGINT, &ignore, &saved_int_);
+    ::sigaction(SIGQUIT, &ignore, &saved_quit_);
+  }
+  ~TerminalSignalGuard() { restore(); }
+  TerminalSignalGuard(const TerminalSignalGuard&) = delete;
+  TerminalSignalGuard& operator=(const TerminalSignalGuard&) = delete;
+
+  // The child also calls this before exec, so the helper keeps the usual signal actions.
+  void restore() const {
+    ::sigaction(SIGINT, &saved_int_, nullptr);
+    ::sigaction(SIGQUIT, &saved_quit_, nullptr);
+  }
+
+ private:
+  struct sigaction saved_int_ {};
+  struct sigaction saved_quit_ {};
+};
 
 [[noreturn]] void exec_helper(char** args, int sock, int err_write, int status_write) {
   if (::dup2(sock, STDIN_FILENO) < 0 || ::dup2(sock, STDOUT_FILENO) < 0 ||
@@ -670,11 +699,13 @@ Result<HelperPrivilege::Exchange> HelperPrivilege::exchange(const Request& reque
   }
   args.push_back(nullptr);
 
+  const TerminalSignalGuard terminal_signals;
   const pid_t child = ::fork();
   if (child < 0) {
     return unexpected_text("The privileged helper did not start. " + errno_text());
   }
   if (child == 0) {
+    terminal_signals.restore();
     exec_helper(args.data(), child_sock.get(), err_write.get(), status_write.get());
   }
   child_sock = FileDescriptor();
@@ -732,7 +763,10 @@ Result<HelperPrivilege::Exchange> HelperPrivilege::exchange(const Request& reque
     return exchange;
   }
   close_fd(&passed);
-  if (WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 126) {
+  // The helper leaves the terminal session at start. So a terminal signal can only stop pkexec.
+  const bool interrupted = WIFSIGNALED(wait_status) &&
+                           (WTERMSIG(wait_status) == SIGINT || WTERMSIG(wait_status) == SIGQUIT);
+  if (interrupted || (WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 126)) {
     return unexpected_text("Authorization was cancelled. The action was not done.");
   }
   if (WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 127) {

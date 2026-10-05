@@ -12,6 +12,8 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "The helper must run as root.\n");
       return 1;
     }
+    // Leave the terminal session. Then Ctrl+C at the terminal cannot stop the root work half-way.
+    (void)::setsid();
     hotmon::SystemRunner runner;
     hotmon::SystemSignals signals;
     hotmon::DirectPrivilege worker(runner, signals, hotmon::Paths::system());
