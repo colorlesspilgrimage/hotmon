@@ -377,4 +377,40 @@ TEST(Render, StyledRowsMatchTextRows) {
   }
 }
 
+// Text from other programs can contain control characters.
+// The screen must not get them, because they move the cursor and break the layout.
+TEST(Render, ControlCharactersDoNotReachTheScreen) {
+  const std::string hostile = std::string("evil\x1b[2J\r\b\t\n\x7f", 13) + std::string(1, '\0') +
+                              "end\xc2\x9b" "31m\xe2";
+  const char* locales[] = {"C", "C.UTF-8"};
+  const View views[] = {View::Status, View::Monitor, View::Wizard};
+  for (const char* locale : locales) {
+    if (setlocale(LC_ALL, locale) == nullptr) {
+      continue;
+    }
+    for (const View view : views) {
+      auto app = plain_app("/tmp/hotmon-control.json");
+      app.view = view;
+      app.running = true;
+      app.notice = hostile;
+      const auto t0 = std::chrono::steady_clock::time_point{};
+      app.monitor.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", hostile, 0, 0}}, t0);
+      for (const auto& line : render(app, 120, 30)) {
+        for (size_t index = 0; index < line.size(); ++index) {
+          const auto byte = static_cast<unsigned char>(line[index]);
+          EXPECT_FALSE(byte < 0x20 || byte == 0x7f) << locale << " byte " << int(byte);
+          if (byte == 0xc2 && index + 1 < line.size()) {
+            const auto next = static_cast<unsigned char>(line[index + 1]);
+            EXPECT_FALSE(next >= 0x80 && next < 0xa0) << locale << " C1 control";
+          }
+        }
+        if (std::string(locale) == "C") {
+          EXPECT_EQ(line.size(), 120u);
+        }
+      }
+    }
+  }
+  setlocale(LC_ALL, "C");
+}
+
 }
