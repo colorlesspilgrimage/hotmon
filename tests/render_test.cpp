@@ -496,4 +496,185 @@ TEST(Render, ControlCharactersDoNotReachTheScreen) {
   setlocale(LC_ALL, "C");
 }
 
+App fakemii_status(const char* path) {
+  auto app = running_status(path);
+  app.active = sample_profile();
+  EXPECT_TRUE(app.fakemii.start("127.0.0.1", 0));
+  return app;
+}
+
+std::string fakemii_proxy(const App& app) {
+  return app.fakemii.address() + ":" + std::to_string(app.fakemii.port());
+}
+
+// Join the inner text of box rows with spaces. Wrapped text then reads as one line again.
+std::string box_text(const std::vector<std::string>& lines) {
+  std::string text;
+  for (const std::string& line : lines) {
+    if (line.size() < 2) {
+      continue;
+    }
+    std::string inner = line.substr(1, line.size() - 2);
+    inner.erase(inner.find_last_not_of(' ') + 1);
+    text += inner + " ";
+  }
+  return text;
+}
+
+void expect_keys_at_bottom(const std::vector<std::string>& lines, int width, int height) {
+  ASSERT_EQ(static_cast<int>(lines.size()), height);
+  EXPECT_EQ(lines.back().front(), '+') << width << "x" << height;
+  EXPECT_EQ(lines.back().back(), '+') << width << "x" << height;
+  EXPECT_TRUE(has_row_with(lines, "q: quit")) << width << "x" << height;
+  for (const std::string& line : lines) {
+    EXPECT_EQ(column_count(line), width) << line;
+  }
+}
+
+TEST(Render, FakeMiiPopupShowsTheInstructions) {
+  setlocale(LC_ALL, "C");
+  auto app = fakemii_status("/tmp/hotmon-fakemii-popup.json");
+  const auto lines = render(app, 100, 40);
+  const std::string text = joined(lines);
+  for (const std::string& part :
+       {std::string("FakeMii (3DS)"), std::string("SSID: Hotmon"), fakemii_proxy(app),
+        std::string("Internet Settings"), std::string("Connection Settings"),
+        std::string("Change Settings"), std::string("Proxy Settings"), std::string("Detailed Setup"),
+        std::string("Test Connection"), std::string("upstream None"),
+        std::string("Requests served: 0"), std::string("Last request: none yet"),
+        std::string("Port " + std::to_string(app.fakemii.port()))}) {
+    EXPECT_NE(text.find(part), std::string::npos) << part;
+  }
+  EXPECT_EQ(text.find("conntest served"), std::string::npos);
+  expect_keys_at_bottom(lines, 100, 40);
+}
+
+TEST(Render, FakeMiiPopupShowsLiveEvidence) {
+  setlocale(LC_ALL, "C");
+  auto app = fakemii_status("/tmp/hotmon-fakemii-evidence.json");
+  EXPECT_EQ(joined(render(app, 100, 40)).find("conntest served"), std::string::npos);
+  const std::string reply = fakemii_exchange(
+      app.fakemii, "GET http://conntest.nintendowifi.net/ HTTP/1.1\r\nHost: conntest.nintendowifi.net\r\n\r\n");
+  ASSERT_TRUE(reply.starts_with("HTTP/1.1 200 OK"));
+  ASSERT_EQ(app.fakemii.served(), 1u);
+  const std::string text = joined(render(app, 100, 40));
+  EXPECT_NE(text.find("Requests served: 1"), std::string::npos);
+  EXPECT_NE(text.find("Last request: conntest.nintendowifi.net/"), std::string::npos);
+  EXPECT_NE(text.find("conntest served"), std::string::npos);
+}
+
+TEST(Render, FakeMiiPopupSanitizesTheLastRequest) {
+  auto app = fakemii_status("/tmp/hotmon-fakemii-hostile.json");
+  (void)fakemii_exchange(app.fakemii, "GET /evil\x1b[2J\r\bend HTTP/1.1\r\n\r\n");
+  ASSERT_EQ(app.fakemii.served(), 1u);
+  ASSERT_NE(app.fakemii.last_target().find('\x1b'), std::string::npos);
+  for (const char* locale : {"C", "C.UTF-8"}) {
+    if (setlocale(LC_ALL, locale) == nullptr) {
+      continue;
+    }
+    const auto lines = render(app, 100, 40);
+    EXPECT_TRUE(has_row_with(lines, "Last request: /evil")) << locale;
+    for (const std::string& line : lines) {
+      for (unsigned char byte : line) {
+        EXPECT_FALSE(byte < 0x20 || byte == 0x7F) << locale << " byte " << int(byte);
+      }
+      EXPECT_EQ(column_count(line), 100) << locale << " " << line;
+    }
+  }
+  setlocale(LC_ALL, "C");
+}
+
+TEST(Render, FakeMiiPopupIsHiddenWhenFakeMiiIsOff) {
+  setlocale(LC_ALL, "C");
+  auto app = fakemii_status("/tmp/hotmon-fakemii-off.json");
+  app.fakemii.stop();
+  for (int height : {24, 40}) {
+    const std::string text = joined(render(app, 100, height));
+    EXPECT_EQ(text.find("Proxy:"), std::string::npos);
+    EXPECT_EQ(text.find("FakeMii (3DS)"), std::string::npos);
+    EXPECT_EQ(text.find("FakeMii is on"), std::string::npos);
+  }
+}
+
+TEST(Render, FakeMiiPopupHidesOnShortTerminals) {
+  setlocale(LC_ALL, "C");
+  auto app = fakemii_status("/tmp/hotmon-fakemii-short.json");
+  for (int height : {12, 13}) {
+    const auto lines = render(app, 80, height);
+    expect_keys_at_bottom(lines, 80, height);
+    const std::string text = joined(lines);
+    EXPECT_EQ(text.find("FakeMii (3DS)"), std::string::npos) << height;
+    EXPECT_EQ(text.find("Proxy:"), std::string::npos) << height;
+    EXPECT_TRUE(has_row_with(lines, "FakeMii is on: " + fakemii_proxy(app))) << height;
+  }
+  const auto tiny = render(app, 80, 8);
+  EXPECT_EQ(tiny.size(), 8u);
+  EXPECT_EQ(joined(tiny).find("FakeMii (3DS)"), std::string::npos);
+}
+
+TEST(Render, FakeMiiPopupAppearsWhenTheTerminalIsTallEnough) {
+  setlocale(LC_ALL, "C");
+  auto app = fakemii_status("/tmp/hotmon-fakemii-tall.json");
+  EXPECT_NE(joined(render(app, 80, 40)).find("FakeMii (3DS)"), std::string::npos);
+  bool saw_popup = false;
+  bool saw_hint = false;
+  for (int height = 12; height <= 60; ++height) {
+    const auto lines = render(app, 80, height);
+    expect_keys_at_bottom(lines, 80, height);
+    const bool popup = has_row_with(lines, "FakeMii (3DS)");
+    const bool hint = has_row_with(lines, "Make the terminal taller");
+    EXPECT_NE(popup, hint) << height;
+    saw_popup = saw_popup || popup;
+    saw_hint = saw_hint || hint;
+  }
+  EXPECT_TRUE(saw_popup);
+  EXPECT_TRUE(saw_hint);
+}
+
+TEST(Render, FakeMiiNoteForUnmanagedFirewall) {
+  setlocale(LC_ALL, "C");
+  auto app = fakemii_status("/tmp/hotmon-fakemii-firewall.json");
+  for (BackendKind backend : {BackendKind::NetworkManager, BackendKind::Iwd}) {
+    app.backend = backend;
+    EXPECT_NE(box_text(render(app, 100, 40)).find("A host firewall (such as ufw) may block port 3000."),
+              std::string::npos);
+  }
+  app.backend = BackendKind::DirectHostapd;
+  const std::string text = joined(render(app, 100, 40));
+  EXPECT_NE(text.find("FakeMii (3DS)"), std::string::npos);
+  EXPECT_EQ(text.find("may block port"), std::string::npos);
+}
+
+TEST(Render, FooterShowsTheFakeMiiKey) {
+  setlocale(LC_ALL, "C");
+  auto app = running_status("/tmp/hotmon-fakemii-footer.json");
+  EXPECT_TRUE(has_row_with(render(app, 120, 24), "f: FakeMii"));
+  app.view = View::Monitor;
+  EXPECT_EQ(joined(render(app, 120, 24)).find("f: FakeMii"), std::string::npos);
+}
+
+TEST(Render, FakeMiiPopupKeepsTheDevicesPanelRule) {
+  setlocale(LC_ALL, "C");
+  auto app = fakemii_status("/tmp/hotmon-fakemii-devices.json");
+  app.monitor.update(numbered_clients(3));
+  bool saw_hidden = false;
+  bool saw_shown = false;
+  for (int height = 12; height <= 60; ++height) {
+    const auto lines = render(app, 80, height);
+    expect_keys_at_bottom(lines, 80, height);
+    if (!has_row_with(lines, "FakeMii (3DS)")) {
+      continue;
+    }
+    const bool devices = has_row_with(lines, "Devices (3)");
+    saw_hidden = saw_hidden || !devices;
+    saw_shown = saw_shown || devices;
+    if (devices) {
+      EXPECT_TRUE(has_row_with(lines, "aa:bb:cc:dd:ee:10") || has_row_with(lines, "more devices."))
+          << height;
+    }
+  }
+  EXPECT_TRUE(saw_hidden);
+  EXPECT_TRUE(saw_shown);
+}
+
 }

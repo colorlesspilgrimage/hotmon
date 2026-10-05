@@ -4,7 +4,13 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <fstream>
+#include <sstream>
+#include <thread>
+
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace {
 
@@ -442,6 +448,222 @@ TEST(App, CancelledCaptureDoesNotStart) {
   app.capture_open_failed("Authorization was cancelled. The action was not done.");
   EXPECT_NE(app.capture.phase(), CapturePhase::Running);
   EXPECT_NE(app.notice.find("cancelled"), std::string::npos);
+}
+
+const std::string FAKEMII_CONNTEST =
+    "GET http://conntest.nintendowifi.net/ HTTP/1.1\r\nHost: conntest.nintendowifi.net\r\n\r\n";
+
+// Apply the sample profile. Then move the active range to loopback so FakeMii can bind.
+App loopback_app(const std::filesystem::path& dir) {
+  auto app = loaded_app(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  EXPECT_TRUE(apply_direct(app, runner, signals, local_paths(dir)));
+  app.active->address_cidr = "127.0.0.0/8";
+  app.fakemii_port = 0;
+  return app;
+}
+
+std::string file_text(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
+
+TEST(App, FakeMiiKeyTogglesTheServer) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  ASSERT_EQ(app.view, View::Status);
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_TRUE(app.fakemii.running());
+  EXPECT_NE(app.notice.find("FakeMii is on"), std::string::npos);
+  EXPECT_NE(app.notice.find("127.0.0.1:" + std::to_string(app.fakemii.port())), std::string::npos);
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_EQ(app.notice, "FakeMii is off.");
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiKeyNeedsARunningHotspot) {
+  const auto dir = scratch_dir();
+  auto app = loaded_app(dir);
+  app.view = View::Status;
+  app.fakemii_port = 0;
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_NE(app.notice.find("The hotspot is not active."), std::string::npos);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiKeyIsIgnoredInTheMonitorAndWizardViews) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  app.view = View::Monitor;
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_EQ(app.view, View::Monitor);
+  app.wizard.reopen();
+  app.view = View::Wizard;
+  app.wizard.page = Page::Review;
+  const auto before = app.wizard.review_lines();
+  const std::string ssid = app.wizard.ssid;
+  app.on_key(key_char('f'));
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_EQ(app.wizard.review_lines(), before);
+  EXPECT_EQ(app.wizard.ssid, ssid);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiStopsWhenTheHotspotStops) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  app.on_key(key_char('f'));
+  ASSERT_TRUE(app.fakemii.running());
+  const uint16_t port = app.fakemii.port();
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  ASSERT_TRUE(stop_direct(app, runner, signals, local_paths(dir)));
+  EXPECT_FALSE(app.running);
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_EQ(loopback_connect(port), -1);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiStopsWhenTheWizardAppliesAgain) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  app.on_key(key_char('f'));
+  ASSERT_TRUE(app.fakemii.running());
+  const uint16_t port = app.fakemii.port();
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  ASSERT_TRUE(apply_direct(app, runner, signals, local_paths(dir)));
+  EXPECT_TRUE(app.running);
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_NE(app.notice.find("FakeMii is off"), std::string::npos);
+  EXPECT_EQ(loopback_connect(port), -1);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiStaysOnWhenApplyIsRejectedEarly) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  app.on_key(key_char('f'));
+  ASSERT_TRUE(app.fakemii.running());
+  app.wizard.reopen();
+  app.view = View::Wizard;
+  app.wizard.page = Page::Review;
+  app.on_key(key_esc());
+  ASSERT_TRUE(app.wizard.is_cancelled());
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  auto error = apply_direct(app, runner, signals, local_paths(dir));
+  ASSERT_FALSE(error);
+  EXPECT_TRUE(runner.calls.empty());
+  EXPECT_TRUE(app.fakemii.running());
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiBindFailureShowsANotice) {
+  const auto dir = scratch_dir();
+  auto app = loaded_app(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  ASSERT_TRUE(apply_direct(app, runner, signals, local_paths(dir)));
+  app.fakemii_port = 0;
+  app.on_key(key_char('f'));
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_NE(app.notice.find("192.168.42.1"), std::string::npos) << app.notice;
+  EXPECT_TRUE(app.running);
+
+  FakeMii other;
+  ASSERT_TRUE(other.start("127.0.0.1", 0));
+  auto busy = loopback_app(dir);
+  busy.fakemii_port = other.port();
+  busy.on_key(key_char('f'));
+  EXPECT_FALSE(busy.fakemii.running());
+  EXPECT_NE(busy.notice.find("already in use"), std::string::npos) << busy.notice;
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiIsNotSavedInTheProfile) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  const std::string before = file_text(app.profile_path);
+  ASSERT_FALSE(before.empty());
+  app.on_key(key_char('f'));
+  ASSERT_TRUE(app.fakemii.running());
+  EXPECT_EQ(file_text(app.profile_path), before);
+  EXPECT_EQ(before.find("fakemii"), std::string::npos);
+  app.on_key(key_char('f'));
+  EXPECT_EQ(file_text(app.profile_path), before);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, FakeMiiTickServesRequests) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  app.on_key(key_char('f'));
+  ASSERT_TRUE(app.fakemii.running());
+  const int fd = loopback_connect(app.fakemii.port());
+  ASSERT_GE(fd, 0);
+  ASSERT_EQ(::send(fd, FAKEMII_CONNTEST.data(), FAKEMII_CONNTEST.size(), MSG_NOSIGNAL),
+            static_cast<ssize_t>(FAKEMII_CONNTEST.size()));
+  for (int round = 0; round < 200 && app.fakemii.served() == 0; ++round) {
+    auto runner = ScriptedRunner::with_results({unexpected_text("iw failed"), unexpected_text("ip failed")});
+    app.tick(runner);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(app.fakemii.served(), 1u);
+  EXPECT_TRUE(app.fakemii.conntest_served());
+  ::close(fd);
+  std::filesystem::remove_all(dir);
+}
+
+class CountingPrivileged : public Privileged {
+ public:
+  explicit CountingPrivileged(Privileged& inner) : inner_(inner) {}
+  Result<StartReport> apply(BackendKind backend, const Profile& profile) override {
+    ++applies;
+    return inner_.apply(backend, profile);
+  }
+  Result<void> stop(const StopRequest& request) override {
+    ++stops;
+    return inner_.stop(request);
+  }
+  Result<FileDescriptor> open_capture_socket(std::string_view interface) override {
+    ++captures;
+    return inner_.open_capture_socket(interface);
+  }
+  int applies = 0;
+  int stops = 0;
+  int captures = 0;
+
+ private:
+  Privileged& inner_;
+};
+
+TEST(App, FakeMiiNeedsNoPrivilege) {
+  const auto dir = scratch_dir();
+  auto app = loaded_app(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  DirectPrivilege direct(runner, signals, local_paths(dir));
+  CountingPrivileged counting(direct);
+  ASSERT_TRUE(app.apply_hotspot(counting));
+  app.active->address_cidr = "127.0.0.0/8";
+  app.fakemii_port = 0;
+  const size_t calls = runner.calls.size();
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_TRUE(app.fakemii.running());
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_EQ(counting.applies, 1);
+  EXPECT_EQ(counting.stops, 0);
+  EXPECT_EQ(counting.captures, 0);
+  EXPECT_EQ(runner.calls.size(), calls);
+  std::filesystem::remove_all(dir);
 }
 
 }
