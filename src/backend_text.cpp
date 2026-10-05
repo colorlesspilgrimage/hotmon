@@ -71,9 +71,12 @@ std::string nft_text(const Profile& profile) {
   std::string allow;
   if (auto network = profile.network()) {
     if (auto gateway = network->gateway()) {
+      // The FakeMii rule stays in the table when FakeMii is off.
+      // "socket wildcard 0" accepts only a socket that listens on one address, as FakeMii does.
+      // Other services on 0.0.0.0 port 3000 then stay closed to hotspot clients.
       allow = std::format(
           "    iifname \"{}\" ip daddr {} udp dport 53 accept\n    iifname \"{}\" ip daddr {} tcp "
-          "dport 53 accept\n    iifname \"{}\" ip daddr {} tcp dport {} accept\n",
+          "dport 53 accept\n    iifname \"{}\" ip daddr {} tcp dport {} socket wildcard 0 accept\n",
           ap, *gateway, ap, *gateway, ap, *gateway, FAKEMII_PORT);
     }
   }

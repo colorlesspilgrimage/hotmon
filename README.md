@@ -76,7 +76,7 @@ on the 3DS: Internet Settings > Connection Settings > pick the connection > Chan
 
 it mainly helps when the upstream is `none`. with an upstream connection the console reaches the real test server anyway.
 
-firewall: with the direct hostapd backend, hotmon opens TCP port 3000 to the gateway in its own nftables table. apply the wizard once after an update to get this rule. with NetworkManager or iwd, hotmon does not manage the firewall. a host firewall (such as ufw) may block port 3000.
+firewall: with the direct hostapd backend, hotmon opens TCP port 3000 to the gateway in its own nftables table. the rule accepts only a socket that listens on one address, as FakeMii does. other services on `0.0.0.0` port 3000 stay closed to hotspot clients. apply the wizard once after an update to get this rule. with NetworkManager or iwd, hotmon does not manage the firewall. a host firewall (such as ufw) may block port 3000.
 
 idea from FakeMii (https://github.com/Lectem/FakeMii).
 
