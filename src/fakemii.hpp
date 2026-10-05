@@ -18,6 +18,11 @@ inline constexpr size_t FAKEMII_MAX_CONNECTIONS = 8;
 inline constexpr std::chrono::seconds FAKEMII_TIMEOUT{5};  // per connection, from accept
 inline constexpr size_t FAKEMII_TARGET_MAX = 80;         // stored bytes of host/path
 
+// Join an IPv4 address and a port. Example: 192.168.42.1:3000.
+inline std::string endpoint_text(std::string_view ip, uint16_t port) {
+  return std::string(ip) + ":" + std::to_string(port);
+}
+
 struct FakeMiiReply {
   std::string bytes;      // full HTTP response, ready to send
   bool conntest = false;
@@ -48,6 +53,7 @@ class FakeMii {
   bool running() const;
   uint16_t port() const;
   const std::string& address() const;
+  std::string endpoint() const { return endpoint_text(address_, port_); }
   void poll(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
   size_t served() const;
   const std::string& last_target() const;

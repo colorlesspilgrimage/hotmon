@@ -503,10 +503,6 @@ App fakemii_status(const char* path) {
   return app;
 }
 
-std::string fakemii_proxy(const App& app) {
-  return app.fakemii.address() + ":" + std::to_string(app.fakemii.port());
-}
-
 // Join the inner text of box rows with spaces. Wrapped text then reads as one line again.
 std::string box_text(const std::vector<std::string>& lines) {
   std::string text;
@@ -537,7 +533,7 @@ TEST(Render, FakeMiiPopupShowsTheInstructions) {
   const auto lines = render(app, 100, 40);
   const std::string text = joined(lines);
   for (const std::string& part :
-       {std::string("FakeMii (3DS)"), std::string("SSID: Hotmon"), fakemii_proxy(app),
+       {std::string("FakeMii (3DS)"), std::string("SSID: Hotmon"), app.fakemii.endpoint(),
         std::string("Internet Settings"), std::string("Connection Settings"),
         std::string("Change Settings"), std::string("Proxy Settings"), std::string("Detailed Setup"),
         std::string("Test Connection"), std::string("upstream None"),
@@ -553,8 +549,7 @@ TEST(Render, FakeMiiPopupShowsLiveEvidence) {
   setlocale(LC_ALL, "C");
   auto app = fakemii_status("/tmp/hotmon-fakemii-evidence.json");
   EXPECT_EQ(joined(render(app, 100, 40)).find("conntest served"), std::string::npos);
-  const std::string reply = fakemii_exchange(
-      app.fakemii, "GET http://conntest.nintendowifi.net/ HTTP/1.1\r\nHost: conntest.nintendowifi.net\r\n\r\n");
+  const std::string reply = fakemii_exchange(app.fakemii, FAKEMII_CONNTEST_REQUEST);
   ASSERT_TRUE(reply.starts_with("HTTP/1.1 200 OK"));
   ASSERT_EQ(app.fakemii.served(), 1u);
   const std::string text = joined(render(app, 100, 40));
@@ -605,7 +600,7 @@ TEST(Render, FakeMiiPopupHidesOnShortTerminals) {
     const std::string text = joined(lines);
     EXPECT_EQ(text.find("FakeMii (3DS)"), std::string::npos) << height;
     EXPECT_EQ(text.find("Proxy:"), std::string::npos) << height;
-    EXPECT_TRUE(has_row_with(lines, "FakeMii is on: " + fakemii_proxy(app))) << height;
+    EXPECT_TRUE(has_row_with(lines, "FakeMii is on: " + app.fakemii.endpoint())) << height;
   }
   const auto tiny = render(app, 80, 8);
   EXPECT_EQ(tiny.size(), 8u);

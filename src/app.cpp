@@ -349,7 +349,7 @@ Step App::toggle_fakemii() {
     notice = started.error();
     return Step::Continue;
   }
-  notice = "FakeMii is on. Proxy: " + fakemii.address() + ":" + std::to_string(fakemii.port()) + ".";
+  notice = "FakeMii is on. Proxy: " + fakemii.endpoint() + ".";
   return Step::Continue;
 }
 

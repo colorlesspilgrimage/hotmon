@@ -499,17 +499,13 @@ std::vector<StyledRow> devices_panel(const App& app, int width, const BoxChars& 
   return lines;
 }
 
-std::string fakemii_proxy(const App& app) {
-  return app.fakemii.address() + ":" + std::to_string(app.fakemii.port());
-}
-
 std::vector<StyledRow> fakemii_popup(const App& app, int width, const BoxChars& box) {
   const std::string ssid = app.active ? app.active->ssid : app.status.ssid;
   const std::string port = std::to_string(app.fakemii.port());
   const std::string& target = app.fakemii.last_target();
   std::vector<StyledRow> rows;
   rows.push_back(StyledRow{"FakeMii is on. SSID: " + ssid, Style::Good});
-  rows.push_back(StyledRow{"Proxy: " + fakemii_proxy(app), Style::Accent});
+  rows.push_back(StyledRow{"Proxy: " + app.fakemii.endpoint(), Style::Accent});
   rows.push_back(StyledRow{"Requests served: " + std::to_string(app.fakemii.served()), Style::Plain});
   rows.push_back(StyledRow{"Last request: " + (target.empty() ? std::string("none yet") : printable_text(target)),
                            Style::Plain});
@@ -578,7 +574,7 @@ std::vector<StyledRow> status_lines(const App& app, int width, const BoxChars& b
       // Show the hint as the first row of the status box, so a cut keeps it.
       popup.clear();
       body.insert(body.begin(),
-                  StyledRow{"FakeMii is on: " + fakemii_proxy(app) +
+                  StyledRow{"FakeMii is on: " + app.fakemii.endpoint() +
                                 ". Make the terminal taller to see the steps.",
                             Style::Good});
       lines.clear();

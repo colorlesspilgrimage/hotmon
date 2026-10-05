@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <format>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -32,13 +33,14 @@ This is test.html page
 
 constexpr std::string_view CONNTEST_HOST = "conntest.nintendowifi.net";
 
-constexpr std::string_view NOT_FOUND =
-    "HTTP/1.1 404 Not Found\r\n"
-    "Content-Type: text/plain\r\n"
-    "Content-Length: 14\r\n"
-    "Connection: close\r\n"
-    "\r\n"
-    "404 Not Found\n";
+std::string http_reply(std::string_view status, std::string_view type, std::string_view extra,
+                       std::string_view body) {
+  return std::format(
+      "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{}",
+      status, type, body.size(), extra, body);
+}
+
+const std::string NOT_FOUND = http_reply("404 Not Found", "text/plain", "", "404 Not Found\n");
 
 constexpr std::string_view INVALID_TARGET = "(invalid request)";
 
@@ -122,17 +124,8 @@ FakeMiiReply not_found(std::string target) {
 }
 
 std::string conntest_bytes() {
-  std::string bytes = "HTTP/1.1 200 OK\r\n"
-                      "Content-Type: text/html\r\n"
-                      "Content-Length: " +
-                      std::to_string(CONNTEST_PAGE.size()) +
-                      "\r\n"
-                      "Connection: close\r\n"
-                      "Server: BigIP\r\n"
-                      "X-Organization: Nintendo\r\n"
-                      "\r\n";
-  bytes += CONNTEST_PAGE;
-  return bytes;
+  return http_reply("200 OK", "text/html", "Server: BigIP\r\nX-Organization: Nintendo\r\n",
+                    CONNTEST_PAGE);
 }
 
 bool would_block(int err) { return err == EAGAIN || err == EWOULDBLOCK; }
@@ -203,7 +196,7 @@ Result<void> FakeMii::start(std::string_view bind_ip, uint16_t port) {
     if (err == EADDRNOTAVAIL) {
       return unexpected_text("The address " + ip_text + " is not available on this computer.");
     }
-    return unexpected_text("FakeMii could not listen on " + ip_text + ":" + port_text + ". " +
+    return unexpected_text("FakeMii could not listen on " + endpoint_text(ip_text, port) + ". " +
                            errno_text(err) + ".");
   }
   sockaddr_in bound{};

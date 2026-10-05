@@ -450,9 +450,6 @@ TEST(App, CancelledCaptureDoesNotStart) {
   EXPECT_NE(app.notice.find("cancelled"), std::string::npos);
 }
 
-const std::string FAKEMII_CONNTEST =
-    "GET http://conntest.nintendowifi.net/ HTTP/1.1\r\nHost: conntest.nintendowifi.net\r\n\r\n";
-
 // Apply the sample profile. Then move the active range to loopback so FakeMii can bind.
 App loopback_app(const std::filesystem::path& dir) {
   auto app = loaded_app(dir);
@@ -461,6 +458,14 @@ App loopback_app(const std::filesystem::path& dir) {
   EXPECT_TRUE(apply_direct(app, runner, signals, local_paths(dir)));
   app.active->address_cidr = "127.0.0.0/8";
   app.fakemii_port = 0;
+  return app;
+}
+
+// Start FakeMii on a loopback hotspot.
+App with_fakemii(const std::filesystem::path& dir) {
+  auto app = loopback_app(dir);
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_TRUE(app.fakemii.running());
   return app;
 }
 
@@ -517,9 +522,7 @@ TEST(App, FakeMiiKeyIsIgnoredInTheMonitorAndWizardViews) {
 
 TEST(App, FakeMiiStopsWhenTheHotspotStops) {
   const auto dir = scratch_dir();
-  auto app = loopback_app(dir);
-  app.on_key(key_char('f'));
-  ASSERT_TRUE(app.fakemii.running());
+  auto app = with_fakemii(dir);
   const uint16_t port = app.fakemii.port();
   ScriptedRunner runner;
   RecordedSignals signals;
@@ -532,9 +535,7 @@ TEST(App, FakeMiiStopsWhenTheHotspotStops) {
 
 TEST(App, FakeMiiStopsWhenTheWizardAppliesAgain) {
   const auto dir = scratch_dir();
-  auto app = loopback_app(dir);
-  app.on_key(key_char('f'));
-  ASSERT_TRUE(app.fakemii.running());
+  auto app = with_fakemii(dir);
   const uint16_t port = app.fakemii.port();
   ScriptedRunner runner;
   RecordedSignals signals;
@@ -548,9 +549,7 @@ TEST(App, FakeMiiStopsWhenTheWizardAppliesAgain) {
 
 TEST(App, FakeMiiStaysOnWhenApplyIsRejectedEarly) {
   const auto dir = scratch_dir();
-  auto app = loopback_app(dir);
-  app.on_key(key_char('f'));
-  ASSERT_TRUE(app.fakemii.running());
+  auto app = with_fakemii(dir);
   app.wizard.reopen();
   app.view = View::Wizard;
   app.wizard.page = Page::Review;
@@ -603,13 +602,11 @@ TEST(App, FakeMiiIsNotSavedInTheProfile) {
 
 TEST(App, FakeMiiTickServesRequests) {
   const auto dir = scratch_dir();
-  auto app = loopback_app(dir);
-  app.on_key(key_char('f'));
-  ASSERT_TRUE(app.fakemii.running());
+  auto app = with_fakemii(dir);
   const int fd = loopback_connect(app.fakemii.port());
   ASSERT_GE(fd, 0);
-  ASSERT_EQ(::send(fd, FAKEMII_CONNTEST.data(), FAKEMII_CONNTEST.size(), MSG_NOSIGNAL),
-            static_cast<ssize_t>(FAKEMII_CONNTEST.size()));
+  ASSERT_EQ(::send(fd, FAKEMII_CONNTEST_REQUEST.data(), FAKEMII_CONNTEST_REQUEST.size(), MSG_NOSIGNAL),
+            static_cast<ssize_t>(FAKEMII_CONNTEST_REQUEST.size()));
   for (int round = 0; round < 200 && app.fakemii.served() == 0; ++round) {
     auto runner = ScriptedRunner::with_results({unexpected_text("iw failed"), unexpected_text("ip failed")});
     app.tick(runner);

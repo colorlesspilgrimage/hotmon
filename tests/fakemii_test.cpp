@@ -22,8 +22,7 @@ namespace {
 
 using namespace hotmon;
 
-const std::string CONNTEST_REQUEST =
-    "GET http://conntest.nintendowifi.net/ HTTP/1.1\r\nHost: conntest.nintendowifi.net\r\n\r\n";
+constexpr std::string_view CONNTEST_REQUEST = FAKEMII_CONNTEST_REQUEST;
 
 const std::string NOT_FOUND_BYTES =
     "HTTP/1.1 404 Not Found\r\n"
@@ -371,10 +370,7 @@ TEST(FakeMii, BindsOnlyTheGivenAddress) {
   // Another loopback address must not reach the server. A wildcard bind would accept it.
   const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   ASSERT_GE(fd, 0);
-  sockaddr_in other{};
-  other.sin_family = AF_INET;
-  other.sin_port = htons(server.port());
-  other.sin_addr.s_addr = htonl(0x7F000002);
+  sockaddr_in other = ipv4_endpoint(0x7F000002, server.port());
   EXPECT_NE(::connect(fd, reinterpret_cast<sockaddr*>(&other), sizeof(other)), 0);
   ::close(fd);
 }
@@ -382,9 +378,7 @@ TEST(FakeMii, BindsOnlyTheGivenAddress) {
 TEST(FakeMii, DoesNotForward) {
   const int target = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   ASSERT_GE(target, 0);
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  sockaddr_in address = ipv4_endpoint(INADDR_LOOPBACK, 0);
   ASSERT_EQ(::bind(target, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
   ASSERT_EQ(::listen(target, 4), 0);
   socklen_t size = sizeof(address);
