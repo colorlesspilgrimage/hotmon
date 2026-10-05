@@ -1,5 +1,7 @@
 #include "backend_text.hpp"
 
+#include "fakemii.hpp"
+
 #include <format>
 
 namespace hotmon {
@@ -66,19 +68,19 @@ std::string dnsmasq_conf_text(const Profile& profile) {
 
 std::string nft_text(const Profile& profile) {
   const std::string& ap = profile.ap_interface;
-  std::string dns;
+  std::string allow;
   if (auto network = profile.network()) {
     if (auto gateway = network->gateway()) {
-      dns = std::format(
+      allow = std::format(
           "    iifname \"{}\" ip daddr {} udp dport 53 accept\n    iifname \"{}\" ip daddr {} tcp "
-          "dport 53 accept\n",
-          ap, *gateway, ap, *gateway);
+          "dport 53 accept\n    iifname \"{}\" ip daddr {} tcp dport {} accept\n",
+          ap, *gateway, ap, *gateway, ap, *gateway, FAKEMII_PORT);
     }
   }
   const std::string input = std::format(
       "  chain input {{\n    type filter hook input priority 0; policy accept;\n    iifname \"{}\" "
       "udp dport 67 accept\n{}    iifname \"{}\" ct state new drop\n  }}\n",
-      ap, dns, ap);
+      ap, allow, ap);
   if (profile.upstream_interface == "none") {
     return std::format(
         "add table inet hotmon\ndelete table inet hotmon\ntable inet hotmon {{\n{}  chain forward "

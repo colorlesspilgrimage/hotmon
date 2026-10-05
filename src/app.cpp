@@ -86,6 +86,9 @@ Result<void> App::apply_hotspot(Privileged& privileged) {
     notice = tools.error();
     return unexpected_text(tools.error());
   }
+  const bool fakemii_was_on = fakemii.running();
+  // The gateway can change. Stop FakeMii before the new settings apply.
+  fakemii.stop();
   auto report = privileged.apply(backend, *profile);
   if (!report) {
     if (running) {
@@ -114,7 +117,13 @@ Result<void> App::apply_hotspot(Privileged& privileged) {
     notice = saved.error();
     return unexpected_text(saved.error());
   }
-  notice = interface_changed ? CAPTURE_WARNING : "The hotspot is active.";
+  if (interface_changed) {
+    notice = CAPTURE_WARNING;
+  } else if (fakemii_was_on) {
+    notice = "The hotspot is active. FakeMii is off. Press f to turn it on again.";
+  } else {
+    notice = "The hotspot is active.";
+  }
   return {};
 }
 
@@ -153,6 +162,7 @@ Result<void> App::refresh_clients(Runner& runner) {
 }
 
 void App::tick(Runner& runner) {
+  fakemii.poll();
   if (running) {
     if (auto refreshed = refresh_clients(runner); !refreshed) {
       replace_notice(refreshed.error());
@@ -173,6 +183,7 @@ void App::replace_notice(std::string message) {
 void App::capture_open_failed(std::string message) { notice = capture.fail_open(std::move(message)); }
 
 void App::finish_stop() {
+  fakemii.stop();
   running = false;
   monitor.clear();
   status = HotspotStatus::stopped();
@@ -180,6 +191,7 @@ void App::finish_stop() {
 }
 
 void App::fail_apply(std::string message) {
+  fakemii.stop();
   wizard.set_error(message);
   status = HotspotStatus::failed(message);
   notice = std::move(message);
@@ -282,6 +294,9 @@ Step App::on_run_key(const Key& key, bool status_view) {
     return accept_capture();
   }
   capture.dismiss_warning();
+  if (key.code == Key::Code::Char && key.ch == U'f' && status_view) {
+    return toggle_fakemii();
+  }
   if (key.code == Key::Code::Char && key.ch == U'm' && status_view) {
     view = View::Monitor;
     return Step::Continue;
@@ -307,6 +322,34 @@ Step App::on_run_key(const Key& key, bool status_view) {
     notice = "Capture is stopped.";
     return Step::Continue;
   }
+  return Step::Continue;
+}
+
+Step App::toggle_fakemii() {
+  if (fakemii.running()) {
+    fakemii.stop();
+    notice = "FakeMii is off.";
+    return Step::Continue;
+  }
+  if (!running || !active) {
+    notice = "The hotspot is not active. Start the hotspot to use FakeMii.";
+    return Step::Continue;
+  }
+  auto network = active->network();
+  if (!network) {
+    notice = "FakeMii needs a gateway address. " + network.error();
+    return Step::Continue;
+  }
+  auto gateway = network->gateway();
+  if (!gateway) {
+    notice = "FakeMii needs a gateway address. " + gateway.error();
+    return Step::Continue;
+  }
+  if (auto started = fakemii.start(*gateway, fakemii_port); !started) {
+    notice = started.error();
+    return Step::Continue;
+  }
+  notice = "FakeMii is on. Proxy: " + fakemii.address() + ":" + std::to_string(fakemii.port()) + ".";
   return Step::Continue;
 }
 

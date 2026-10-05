@@ -238,7 +238,7 @@ void append_box(std::vector<StyledRow>& lines, const BoxChars& box, const std::s
 
 std::string footer_text(const App& app) {
   if (app.view == View::Status) {
-    return "m: monitor  c: capture  z: stop capture  k: stop hotspot  w: wizard  q: quit";
+    return "m: monitor  c: capture  z: stop capture  k: stop hotspot  f: FakeMii  w: wizard  q: quit";
   }
   if (app.view == View::Monitor) {
     return "s: status  c: capture  z: stop capture  k: stop hotspot  q: quit";
@@ -499,6 +499,47 @@ std::vector<StyledRow> devices_panel(const App& app, int width, const BoxChars& 
   return lines;
 }
 
+std::string fakemii_proxy(const App& app) {
+  return app.fakemii.address() + ":" + std::to_string(app.fakemii.port());
+}
+
+std::vector<StyledRow> fakemii_popup(const App& app, int width, const BoxChars& box) {
+  const std::string ssid = app.active ? app.active->ssid : app.status.ssid;
+  const std::string port = std::to_string(app.fakemii.port());
+  const std::string& target = app.fakemii.last_target();
+  std::vector<StyledRow> rows;
+  rows.push_back(StyledRow{"FakeMii is on. SSID: " + ssid, Style::Good});
+  rows.push_back(StyledRow{"Proxy: " + fakemii_proxy(app), Style::Accent});
+  rows.push_back(StyledRow{"Requests served: " + std::to_string(app.fakemii.served()), Style::Plain});
+  rows.push_back(StyledRow{"Last request: " + (target.empty() ? std::string("none yet") : printable_text(target)),
+                           Style::Plain});
+  if (app.fakemii.conntest_served()) {
+    rows.push_back(StyledRow{"conntest served", Style::Good});
+  }
+  rows.emplace_back();
+  rows.push_back(StyledRow{"On the 3DS:", Style::Title});
+  rows.push_back(StyledRow{
+      "1. Internet Settings > Connection Settings > pick this connection > Change Settings.",
+      Style::Plain});
+  rows.push_back(StyledRow{"2. Proxy Settings: Yes > Detailed Setup.", Style::Plain});
+  rows.push_back(
+      StyledRow{"3. Proxy server " + app.fakemii.address() + ", Port " + port + " > save.", Style::Plain});
+  rows.push_back(StyledRow{"4. Test Connection.", Style::Plain});
+  rows.emplace_back();
+  rows.push_back(StyledRow{"FakeMii mainly helps when the hotspot has no upstream (upstream None). With an "
+                           "upstream connection, the console reaches the real test server anyway.",
+                           Style::Dim});
+  if (app.backend != BackendKind::DirectHostapd) {
+    // The firewall note names the fixed port. The firewall rule uses the same constant.
+    rows.push_back(StyledRow{"hotmon does not manage the firewall for this backend. A host firewall (such "
+                             "as ufw) may block port " + std::to_string(FAKEMII_PORT) + ".",
+                             Style::Dim});
+  }
+  std::vector<StyledRow> lines;
+  append_box(lines, box, "FakeMii (3DS)", rows, width, true, 0);
+  return lines;
+}
+
 std::vector<StyledRow> status_lines(const App& app, int width, const BoxChars& box, int body_rows,
                                     bool stretch) {
   std::vector<StyledRow> body;
@@ -528,18 +569,36 @@ std::vector<StyledRow> status_lines(const App& app, int width, const BoxChars& b
   }
   std::vector<StyledRow> lines;
   append_box(lines, box, "Status", body, width, true, 0);
+  std::vector<StyledRow> popup;
+  if (app.fakemii.running()) {
+    if (stretch) {
+      popup = fakemii_popup(app, width, box);
+    }
+    if (static_cast<int>(lines.size() + popup.size()) > body_rows || !stretch) {
+      // The popup does not fit. Show a hint near the top of the status box, so a cut keeps it.
+      popup.clear();
+      body.insert(body.begin() + 1,
+                  StyledRow{"FakeMii is on: " + fakemii_proxy(app) +
+                                ". Make the terminal taller to see the steps.",
+                            Style::Good});
+      lines.clear();
+      append_box(lines, box, "Status", body, width, true, 0);
+    }
+  }
   if (!stretch) {
     const auto devices = devices_panel(app, width, box, 0);
     lines.insert(lines.end(), devices.begin(), devices.end());
     return lines;
   }
-  const int device_rows = body_rows - static_cast<int>(lines.size());
+  const int device_rows = body_rows - static_cast<int>(lines.size() + popup.size());
   if (device_rows < 3) {
     // The devices panel has no space. Stretch the status box so the keys box stays at the bottom.
     lines.clear();
-    append_box(lines, box, "Status", body, width, true, body_rows);
+    append_box(lines, box, "Status", body, width, true, body_rows - static_cast<int>(popup.size()));
+    lines.insert(lines.end(), popup.begin(), popup.end());
     return lines;
   }
+  lines.insert(lines.end(), popup.begin(), popup.end());
   const auto devices = devices_panel(app, width, box, device_rows);
   lines.insert(lines.end(), devices.begin(), devices.end());
   return lines;
