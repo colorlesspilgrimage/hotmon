@@ -743,4 +743,42 @@ Result<StartReport> execute_plan(const ApplyPlan& plan, Runner& runner, ProcessC
   return StartReport{std::move(started), private_hostapd};
 }
 
+Result<void> teardown_hotspot(BackendKind backend, const Profile& profile, bool private_hostapd,
+                              const std::vector<StartedProc>& started, Runner& runner,
+                              ProcessControl& signals, const Paths& paths) {
+  auto commands = plan_stop(backend, profile);
+  if (private_hostapd) {
+    std::erase_if(commands, [](const PlannedCommand& command) {
+      return command.program == "systemctl";
+    });
+  }
+  if (auto stopped = run_stop_commands(commands, runner); !stopped) {
+    return unexpected_text(stopped.error());
+  }
+  if (backend != BackendKind::NetworkManager && backend != BackendKind::Iwd) {
+    if (auto stopped = stop_started(signals, started); !stopped) {
+      return unexpected_text(stopped.error());
+    }
+  }
+  if (auto deleted = run_nft_delete(runner); !deleted) {
+    return unexpected_text(deleted.error());
+  }
+  clear_nft_live(paths);
+  if (auto restored = restore_forwarding(paths); !restored) {
+    return unexpected_text(restored.error());
+  }
+  if (auto restored = restore_hostapd_backup(paths); !restored) {
+    return unexpected_text(restored.error());
+  }
+  std::error_code error;
+  std::filesystem::remove(paths.hostapd_pid(), error);
+  std::filesystem::remove(paths.dnsmasq_pid(), error);
+  const auto iwd_profile = paths.iwd_ap_dir / (profile.ssid + ".ap");
+  if (auto retired = retire_iwd_profile(iwd_profile); !retired) {
+    return unexpected_text(retired.error());
+  }
+  std::filesystem::remove(paths.nm_secret(), error);
+  return {};
+}
+
 }

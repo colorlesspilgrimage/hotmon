@@ -1,15 +1,18 @@
 #pragma once
 
 #include "capture.hpp"
+#include "process.hpp"
 
 #include <array>
 #include <string>
+#include <string_view>
 
 namespace hotmon {
 
 class LocalCapture : public FrameSource {
  public:
-  static Result<LocalCapture> open(std::string_view interface);
+  static Result<FileDescriptor> open_fd(std::string_view interface);
+  static LocalCapture from_fd(FileDescriptor fd);
   Result<std::optional<std::vector<uint8_t>>> try_recv() override;
 
   LocalCapture(const LocalCapture&) = delete;

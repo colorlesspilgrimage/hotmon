@@ -83,5 +83,7 @@ std::filesystem::path default_profile_path();
 Result<void> save_profile(const std::filesystem::path& path, const Profile& profile);
 Result<Profile> load_profile(const std::filesystem::path& path);
 Result<std::optional<Profile>> load_optional(const std::filesystem::path& path);
+Result<std::string> profile_to_json(const Profile& profile);
+Result<Profile> profile_from_json(std::string_view text);
 
 }

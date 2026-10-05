@@ -35,32 +35,31 @@ LocalCapture& LocalCapture::operator=(LocalCapture&& other) noexcept {
   return *this;
 }
 
-Result<LocalCapture> LocalCapture::open(std::string_view interface) {
+Result<FileDescriptor> LocalCapture::open_fd(std::string_view interface) {
   if (!valid_name(interface)) {
     return unexpected_text("The capture interface name is not valid.");
   }
-  const int fd = ::socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, htons(ETH_P_ALL));
-  if (fd < 0) {
+  const int raw = ::socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, htons(ETH_P_ALL));
+  if (raw < 0) {
     return unexpected_text(errno_text());
   }
+  FileDescriptor fd(raw);
   const std::string name(interface);
   const unsigned int index = if_nametoindex(name.c_str());
   if (index == 0) {
-    const std::string message = errno_text();
-    ::close(fd);
-    return unexpected_text(message);
+    return unexpected_text(errno_text());
   }
   sockaddr_ll address{};
   address.sll_family = AF_PACKET;
   address.sll_protocol = htons(ETH_P_ALL);
   address.sll_ifindex = static_cast<int>(index);
-  if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-    const std::string message = errno_text();
-    ::close(fd);
-    return unexpected_text(message);
+  if (::bind(fd.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+    return unexpected_text(errno_text());
   }
-  return LocalCapture(fd);
+  return fd;
 }
+
+LocalCapture LocalCapture::from_fd(FileDescriptor fd) { return LocalCapture(fd.release()); }
 
 Result<std::optional<std::vector<uint8_t>>> LocalCapture::try_recv() {
   const ssize_t size = ::recv(fd_, buffer_.data(), buffer_.size(), MSG_DONTWAIT);

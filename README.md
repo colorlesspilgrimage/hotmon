@@ -27,10 +27,15 @@ The program ends up at `build/hotmon`.
 ## Run
 
 ```
-sudo build/hotmon
+build/hotmon
 ```
 
-The wizard works without root, so you can look around as a normal user. Starting the hotspot needs root or the `CAP_NET_ADMIN` capability.
+Start hotmon as a normal user. No `sudo` is needed to open the wizard.
+hotmon asks for the admin password or a fingerprint when it starts the hotspot.
+It asks again when it stops the hotspot and when it starts a capture.
+hotmon needs `pkexec` from the `polkit` package.
+A polkit agent or a terminal must be available.
+`sudo build/hotmon` still works and does not ask again.
 
 ## The wizard
 
@@ -68,7 +73,20 @@ Other locales use plain `+`, `-`, and `|` lines.
 
 ## Packet capture
 
-Capture needs root or the `CAP_NET_RAW` capability. It only reads frames on the hotspot interface and never changes them. Pressing `c` shows a warning, and capture starts only after you press Enter to confirm.
+hotmon asks for authorization before capture starts.
+Capture only reads frames on the hotspot interface. It never changes those frames.
+Press `c` to see a warning. Capture starts after you press Enter.
+
+## Authorization
+
+hotmon asks before it starts the hotspot.
+hotmon asks before it stops the hotspot.
+hotmon asks before it starts a capture.
+If you cancel, hotmon does not apply the action.
+The notice says that authorization was cancelled.
+If the check fails, the notice says that authorization failed.
+hotmon never reads, stores, or sees the password.
+The system authentication agent does that work.
 
 ## Backends
 

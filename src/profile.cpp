@@ -16,8 +16,6 @@
 
 namespace hotmon {
 
-Result<std::string> profile_to_json(const Profile& profile);
-Result<Profile> profile_from_json(std::string_view text);
 namespace {
 
 

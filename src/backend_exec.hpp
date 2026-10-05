@@ -40,6 +40,9 @@ class SystemSignals : public ProcessControl {
 
 Result<StartReport> execute_plan(const ApplyPlan& plan, Runner& runner, ProcessControl& signals,
                                  const Paths& paths);
+Result<void> teardown_hotspot(BackendKind backend, const Profile& profile, bool private_hostapd,
+                              const std::vector<StartedProc>& started, Runner& runner,
+                              ProcessControl& signals, const Paths& paths);
 Result<void> run_nft_delete(Runner& runner);
 Result<void> stop_started(ProcessControl& signals, const std::vector<StartedProc>& started);
 Result<void> restore_forwarding(const Paths& paths);

@@ -3,6 +3,8 @@
 #include "test_support.hpp"
 #include <algorithm>
 #include <memory>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <gtest/gtest.h>
 
 namespace {
@@ -131,12 +133,26 @@ TEST(Capture, SummariesCoverCommonFrames) {
 }
 
 TEST(Capture, InvalidInterfaceDoesNotOpenASocket) {
-  auto empty = LocalCapture::open("");
+  auto empty = LocalCapture::open_fd("");
   ASSERT_FALSE(empty);
   EXPECT_NE(empty.error().find("The capture interface name is not valid."), std::string::npos);
-  auto bad = LocalCapture::open("not a name");
+  auto bad = LocalCapture::open_fd("not a name");
   ASSERT_FALSE(bad);
   EXPECT_NE(bad.error().find("The capture interface name is not valid."), std::string::npos);
+}
+
+TEST(Capture, FromFdOwnsTheDescriptor) {
+  int sockets[2] = {-1, -1};
+  ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+  FileDescriptor write_end(sockets[1]);
+  auto source = LocalCapture::from_fd(FileDescriptor(sockets[0]));
+  const char byte = 'x';
+  ASSERT_EQ(::send(write_end.get(), &byte, 1, 0), 1);
+  auto got = source.try_recv();
+  ASSERT_TRUE(got);
+  ASSERT_TRUE(got->has_value());
+  EXPECT_EQ((*got)->size(), 1u);
+  EXPECT_EQ((*got)->front(), static_cast<uint8_t>('x'));
 }
 
 }

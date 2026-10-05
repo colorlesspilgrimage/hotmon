@@ -648,4 +648,87 @@ TEST(Backend, PidFileMustHoldOnlyOnePid) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(Backend, TeardownSignalsTheStartedDaemon) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  std::filesystem::create_directories(paths.state_dir);
+  std::ofstream(paths.hostapd_pid()) << "42\n";
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  signals.names.push_back({42, "hostapd"});
+  ASSERT_TRUE(teardown_hotspot(BackendKind::DirectHostapd, sample_profile(), false,
+                               {StartedProc{42, "hostapd"}}, runner, signals, paths));
+  EXPECT_EQ(signals.pids, std::vector<int>({42}));
+  EXPECT_TRUE(std::any_of(runner.calls.begin(), runner.calls.end(),
+                          [](const auto& command) { return command.program == "nft"; }));
+  EXPECT_FALSE(std::filesystem::exists(paths.hostapd_pid()));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownReportsALiveDaemon) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  signals.names.push_back({8, "dnsmasq"});
+  signals.stay_alive = true;
+  auto error = teardown_hotspot(BackendKind::DirectHostapd, sample_profile(), false,
+                                {StartedProc{8, "dnsmasq"}}, runner, signals, paths);
+  ASSERT_FALSE(error);
+  EXPECT_NE(error.error().find("not stopped"), std::string::npos);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownRemovesTheManagerProfile) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  signals.names.push_back({42, "hostapd"});
+  ASSERT_TRUE(teardown_hotspot(BackendKind::NetworkManager, sample_profile(), false,
+                               {StartedProc{42, "hostapd"}}, runner, signals, paths));
+  EXPECT_TRUE(signals.pids.empty());
+  EXPECT_TRUE(std::any_of(runner.calls.begin(), runner.calls.end(), [](const auto& command) {
+    return command.program == "nmcli" &&
+           std::find(command.args.begin(), command.args.end(), "delete") != command.args.end();
+  }));
+  const auto profile = sample_profile();
+  const auto iwd_path = paths.iwd_ap_dir / (profile.ssid + ".ap");
+  std::filesystem::create_directories(paths.iwd_ap_dir);
+  std::ofstream(iwd_path) << "Passphrase=correct-horse\n";
+  ScriptedRunner iwd_runner;
+  ASSERT_TRUE(teardown_hotspot(BackendKind::Iwd, profile, false, {}, iwd_runner, signals, paths));
+  EXPECT_FALSE(std::filesystem::exists(iwd_path));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownSkipsSystemctlForPrivateHostapd) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  ASSERT_TRUE(teardown_hotspot(BackendKind::ExistingHostapd, sample_profile(), true, {}, runner,
+                               signals, paths));
+  EXPECT_FALSE(std::any_of(runner.calls.begin(), runner.calls.end(),
+                           [](const auto& command) { return command.program == "systemctl"; }));
+  ScriptedRunner service;
+  ASSERT_TRUE(teardown_hotspot(BackendKind::ExistingHostapd, sample_profile(), false, {}, service,
+                               signals, paths));
+  EXPECT_TRUE(std::any_of(service.calls.begin(), service.calls.end(),
+                          [](const auto& command) { return command.program == "systemctl"; }));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, TeardownReportsARejectedStop) {
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  auto runner = ScriptedRunner::with_results({unexpected_text("refused")});
+  RecordedSignals signals;
+  auto error = teardown_hotspot(BackendKind::NetworkManager, sample_profile(), false, {}, runner,
+                                signals, paths);
+  ASSERT_FALSE(error);
+  EXPECT_NE(error.error().find("rejected the stop"), std::string::npos);
+  std::filesystem::remove_all(dir);
+}
+
 }

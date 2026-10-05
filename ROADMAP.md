@@ -14,3 +14,9 @@ Advanced setup is optional.
 
 The status view lists connected devices and their bandwidth.
 The UI fills the terminal and uses solid lines.
+
+### 3. Ask for authorization
+
+hotmon asks for the admin password or a fingerprint before a privileged action.
+The actions are start, stop, and packet capture.
+hotmon does not read or store the password.

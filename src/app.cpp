@@ -64,7 +64,7 @@ Step App::on_key(const Key& key) {
   return Step::Continue;
 }
 
-Result<void> App::apply_hotspot(Runner& runner, ProcessControl& signals, const Paths& paths) {
+Result<void> App::apply_hotspot(Privileged& privileged) {
   if (wizard.is_cancelled()) {
     notice = "The wizard is cancelled. The settings were not applied.";
     return unexpected_text(notice);
@@ -81,12 +81,7 @@ Result<void> App::apply_hotspot(Runner& runner, ProcessControl& signals, const P
     open_upstream_ok = false;
     return unexpected_text(notice);
   }
-  auto plan = plan_apply(backend, *profile, paths);
-  if (!plan) {
-    fail_apply(plan.error());
-    return unexpected_text(plan.error());
-  }
-  auto report = execute_plan(*plan, runner, signals, paths);
+  auto report = privileged.apply(backend, *profile);
   if (!report) {
     if (running) {
       wizard.set_error(report.error());
@@ -118,51 +113,19 @@ Result<void> App::apply_hotspot(Runner& runner, ProcessControl& signals, const P
   return {};
 }
 
-Result<void> App::stop_hotspot(Runner& runner, ProcessControl& signals, const Paths& paths) {
-  capture.stop();
+Result<void> App::stop_hotspot(Privileged& privileged) {
   if (!active) {
+    capture.stop();
     finish_stop();
     return {};
   }
   const Profile profile = *active;
-  auto commands = plan_stop(backend, profile);
-  if (private_hostapd) {
-    std::erase_if(commands, [](const PlannedCommand& command) {
-      return command.program == "systemctl";
-    });
-  }
-  if (auto stopped = run_stop_commands(commands, runner); !stopped) {
+  auto stopped = privileged.stop(StopRequest{backend, profile, private_hostapd, started});
+  if (!stopped) {
     notice = stopped.error();
     return unexpected_text(stopped.error());
   }
-  if (backend != BackendKind::NetworkManager && backend != BackendKind::Iwd) {
-    if (auto stopped = stop_started(signals, started); !stopped) {
-      notice = stopped.error();
-      return unexpected_text(stopped.error());
-    }
-  }
-  if (auto deleted = run_nft_delete(runner); !deleted) {
-    notice = deleted.error();
-    return unexpected_text(deleted.error());
-  }
-  clear_nft_live(paths);
-  if (auto restored = restore_forwarding(paths); !restored) {
-    notice = restored.error();
-    return unexpected_text(restored.error());
-  }
-  if (auto restored = restore_hostapd_backup(paths); !restored) {
-    notice = restored.error();
-    return unexpected_text(restored.error());
-  }
-  std::error_code error;
-  std::filesystem::remove(paths.hostapd_pid(), error);
-  std::filesystem::remove(paths.dnsmasq_pid(), error);
-  const auto iwd_profile = paths.iwd_ap_dir / (profile.ssid + ".ap");
-  if (auto retired = retire_iwd_profile(iwd_profile); !retired) {
-    notice = retired.error();
-    return unexpected_text(retired.error());
-  }
-  std::filesystem::remove(paths.nm_secret(), error);
+  capture.stop();
   started.clear();
   private_hostapd = false;
   finish_stop();
