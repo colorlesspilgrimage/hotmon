@@ -415,7 +415,7 @@ TEST(FakeMii, MovedServerKeepsServing) {
   EXPECT_EQ(fakemii_exchange(second, CONNTEST_REQUEST), fakemii_respond(CONNTEST_REQUEST).bytes);
 }
 
-// The manual check in PLAN.md uses this test. Normal runs skip it.
+// The manual check in PLAN.md uses this test.
 TEST(FakeMiiSmoke, DISABLED_ServeOnLoopbackFor30Seconds) {
   FakeMii server;
   ASSERT_TRUE(server.start("127.0.0.1", 38080));

@@ -66,7 +66,6 @@ struct RequestLine {
   std::string_view version;
 };
 
-// Split on single spaces. The line must have exactly three parts.
 bool split_request_line(std::string_view line, RequestLine& out) {
   const size_t first = line.find(' ');
   if (first == std::string_view::npos) {
@@ -92,7 +91,6 @@ std::string_view trim_blank(std::string_view text) {
   return text;
 }
 
-// Find the value of the Host header. Stop at the blank line that ends the headers.
 std::string_view host_header(std::string_view request) {
   size_t start = request.find('\n');
   while (start != std::string_view::npos && start + 1 < request.size()) {
@@ -270,7 +268,7 @@ void FakeMii::accept_clients(std::chrono::steady_clock::time_point now) {
       return;
     }
     if (clients_.size() >= FAKEMII_MAX_CONNECTIONS) {
-      // Too many open connections. The destructor closes the new socket at once.
+      // The local FileDescriptor closes this socket at the end of the iteration.
       continue;
     }
     clients_.push_back(Client{std::move(fd), now, {}, {}, 0, false, false});
@@ -334,8 +332,7 @@ void FakeMii::write_client(Client& client) {
     }
     client.sent += static_cast<size_t>(count);
   }
-  // Close after each reply. Read and drop some extra bytes first.
-  // Then close() does not send a reset that can drop the reply at the peer.
+  // Drain unread bytes after shutdown. Then close() does not send a reset that drops the reply.
   ::shutdown(client.fd.get(), SHUT_WR);
   std::array<char, READ_CHUNK> drop{};
   for (int round = 0; round < 16; ++round) {
