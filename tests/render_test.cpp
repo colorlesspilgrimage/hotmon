@@ -14,13 +14,15 @@ namespace {
 
 using namespace hotmon;
 
-std::string screen(const App& app) {
+std::string joined(const std::vector<std::string>& lines) {
   std::string text;
-  for (const auto& line : render(app, 80, 24)) {
+  for (const std::string& line : lines) {
     text += line;
   }
   return text;
 }
+
+std::string screen(const App& app) { return joined(render(app, 80, 24)); }
 
 Key none_key() { return {}; }
 
@@ -190,20 +192,21 @@ App plain_app(const char* path) {
   return App::from_parts(BackendKind::NetworkManager, {}, path, std::nullopt);
 }
 
-TEST(Render, StatusShowsDevicesPanel) {
-  auto app = plain_app("/tmp/hotmon-devices.json");
+App running_status(const char* path) {
+  auto app = plain_app(path);
   app.view = View::Status;
   app.running = true;
   app.status = HotspotStatus::running("Hotmon", "wlan0", "NetworkManager");
+  return app;
+}
+
+TEST(Render, StatusShowsDevicesPanel) {
+  auto app = running_status("/tmp/hotmon-devices.json");
   const auto t0 = std::chrono::steady_clock::time_point{};
   app.monitor.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", "192.168.42.20", 0, 0}}, t0);
   app.monitor.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", "192.168.42.20", 2000, 6000}},
                      t0 + std::chrono::seconds(2));
-  std::string text;
-  for (const std::string& line : render(app, 100, 30)) {
-    text += line;
-    text += '\n';
-  }
+  const std::string text = joined(render(app, 100, 30));
   EXPECT_NE(text.find("Devices"), std::string::npos);
   EXPECT_NE(text.find("aa:bb:cc:dd:ee:ff"), std::string::npos);
   EXPECT_NE(text.find("192.168.42.20"), std::string::npos);
@@ -215,10 +218,7 @@ TEST(Render, StatusShowsDevicesPanel) {
 }
 
 TEST(Render, StatusDevicesEmptyStates) {
-  auto app = plain_app("/tmp/hotmon-devices-empty.json");
-  app.view = View::Status;
-  app.running = true;
-  app.status = HotspotStatus::running("Hotmon", "wlan0", "NetworkManager");
+  auto app = running_status("/tmp/hotmon-devices-empty.json");
   const auto running = screen(app);
   EXPECT_NE(running.find("No devices are connected."), std::string::npos);
   app.running = false;
@@ -229,10 +229,7 @@ TEST(Render, StatusDevicesEmptyStates) {
 }
 
 TEST(Render, StatusDevicesNarrowDropsColumns) {
-  auto app = plain_app("/tmp/hotmon-devices-narrow.json");
-  app.view = View::Status;
-  app.running = true;
-  app.status = HotspotStatus::running("Hotmon", "wlan0", "NetworkManager");
+  auto app = running_status("/tmp/hotmon-devices-narrow.json");
   const auto t0 = std::chrono::steady_clock::time_point{};
   app.monitor.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 0, 0}}, t0);
   app.monitor.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 1000, 3000}},
@@ -250,10 +247,7 @@ TEST(Render, StatusDevicesNarrowDropsColumns) {
 }
 
 TEST(Render, StatusDevicesOverflowShowsMore) {
-  auto app = plain_app("/tmp/hotmon-devices-more.json");
-  app.view = View::Status;
-  app.running = true;
-  app.status = HotspotStatus::running("Hotmon", "wlan0", "NetworkManager");
+  auto app = running_status("/tmp/hotmon-devices-more.json");
   std::vector<ClientSnapshot> clients;
   for (int index = 0; index < 10; ++index) {
     ClientSnapshot client;

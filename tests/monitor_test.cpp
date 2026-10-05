@@ -86,104 +86,77 @@ TEST(Monitor, HugeCountersDoNotWrapTheTotal) {
   EXPECT_EQ(state.clients()[1].graph.samples(), (std::vector<uint64_t>{0, max - 10}));
 }
 
-TEST(Monitor, RateIsZeroOnFirstSample) {
-  MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 100, 200}}, t0);
+ClientSnapshot sample(uint64_t rx, uint64_t tx) {
+  return {"aa:bb:cc:dd:ee:ff", std::nullopt, rx, tx};
+}
+
+void expect_rates(const MonitorState& state, uint64_t rx, uint64_t tx) {
   const auto clients = state.clients();
   ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0].rx_rate, 0u);
-  EXPECT_EQ(clients[0].tx_rate, 0u);
+  EXPECT_EQ(clients[0].rx_rate, rx);
+  EXPECT_EQ(clients[0].tx_rate, tx);
+}
+
+const auto kT0 = std::chrono::steady_clock::time_point{};
+
+TEST(Monitor, RateIsZeroOnFirstSample) {
+  MonitorState state;
+  state.update({sample(100, 200)}, kT0);
+  expect_rates(state, 0, 0);
 }
 
 TEST(Monitor, RateUsesElapsedTime) {
   MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 0, 0}}, t0);
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 2000, 6000}},
-               t0 + std::chrono::seconds(2));
-  const auto clients = state.clients();
-  ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0].rx_rate, 1000u);
-  EXPECT_EQ(clients[0].tx_rate, 3000u);
+  state.update({sample(0, 0)}, kT0);
+  state.update({sample(2000, 6000)}, kT0 + std::chrono::seconds(2));
+  expect_rates(state, 1000, 3000);
 }
 
 TEST(Monitor, RateKeepsOldValueUnderOneSecond) {
   MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 0, 0}}, t0);
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 2000, 4000}},
-               t0 + std::chrono::seconds(2));
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 9000, 9000}},
-               t0 + std::chrono::seconds(2) + std::chrono::milliseconds(200));
-  const auto clients = state.clients();
-  ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0].rx_rate, 1000u);
-  EXPECT_EQ(clients[0].tx_rate, 2000u);
+  state.update({sample(0, 0)}, kT0);
+  state.update({sample(2000, 4000)}, kT0 + std::chrono::seconds(2));
+  state.update({sample(9000, 9000)}, kT0 + std::chrono::seconds(2) + std::chrono::milliseconds(200));
+  expect_rates(state, 1000, 2000);
 }
 
 TEST(Monitor, RateIsZeroWhenCounterResets) {
   MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 5000, 8000}}, t0);
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 100, 50}},
-               t0 + std::chrono::seconds(1));
-  const auto clients = state.clients();
-  ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0].rx_rate, 0u);
-  EXPECT_EQ(clients[0].tx_rate, 0u);
+  state.update({sample(5000, 8000)}, kT0);
+  state.update({sample(100, 50)}, kT0 + std::chrono::seconds(1));
+  expect_rates(state, 0, 0);
 }
 
 TEST(Monitor, RateIsZeroForIdleDevice) {
   MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 100, 200}}, t0);
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 100, 200}},
-               t0 + std::chrono::seconds(1));
-  const auto clients = state.clients();
-  ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0].rx_rate, 0u);
-  EXPECT_EQ(clients[0].tx_rate, 0u);
+  state.update({sample(100, 200)}, kT0);
+  state.update({sample(100, 200)}, kT0 + std::chrono::seconds(1));
+  expect_rates(state, 0, 0);
 }
 
 TEST(Monitor, ReturningDeviceStartsAtZero) {
   MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 0, 0}}, t0);
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 5000, 5000}},
-               t0 + std::chrono::seconds(2));
-  state.update({}, t0 + std::chrono::seconds(3));
+  state.update({sample(0, 0)}, kT0);
+  state.update({sample(5000, 5000)}, kT0 + std::chrono::seconds(2));
+  state.update({}, kT0 + std::chrono::seconds(3));
   EXPECT_TRUE(state.clients().empty());
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 9000, 9000}},
-               t0 + std::chrono::seconds(4));
-  const auto clients = state.clients();
-  ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0].rx_rate, 0u);
-  EXPECT_EQ(clients[0].tx_rate, 0u);
+  state.update({sample(9000, 9000)}, kT0 + std::chrono::seconds(4));
+  expect_rates(state, 0, 0);
 }
 
 TEST(Monitor, HugeDeltaDoesNotOverflow) {
   MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
   const uint64_t max = std::numeric_limits<uint64_t>::max();
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 0, 0}}, t0);
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, max, max}},
-               t0 + std::chrono::seconds(1));
-  const auto clients = state.clients();
-  ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0].rx_rate, max);
-  EXPECT_EQ(clients[0].tx_rate, max);
+  state.update({sample(0, 0)}, kT0);
+  state.update({sample(max, max)}, kT0 + std::chrono::seconds(1));
+  expect_rates(state, max, max);
 }
 
 TEST(Monitor, TotalRatesSumTheDevices) {
   MonitorState state;
-  const auto t0 = std::chrono::steady_clock::time_point{};
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 0, 0},
-                ClientSnapshot{"11:22:33:44:55:66", std::nullopt, 0, 0}},
-               t0);
-  state.update({ClientSnapshot{"aa:bb:cc:dd:ee:ff", std::nullopt, 1000, 2000},
-                ClientSnapshot{"11:22:33:44:55:66", std::nullopt, 3000, 4000}},
-               t0 + std::chrono::seconds(1));
+  state.update({sample(0, 0), ClientSnapshot{"11:22:33:44:55:66", std::nullopt, 0, 0}}, kT0);
+  state.update({sample(1000, 2000), ClientSnapshot{"11:22:33:44:55:66", std::nullopt, 3000, 4000}},
+               kT0 + std::chrono::seconds(1));
   EXPECT_EQ(state.total_rx_rate(), 4000u);
   EXPECT_EQ(state.total_tx_rate(), 6000u);
 }

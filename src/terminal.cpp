@@ -100,35 +100,20 @@ void open_capture(App& app) {
 }
 
 int attr_for(Style style) {
-  if (!has_colors()) {
-    switch (style) {
-      case Style::Title:
-        return A_BOLD | A_REVERSE;
-      case Style::Accent:
-      case Style::Good:
-      case Style::Warn:
-        return A_BOLD;
-      case Style::Dim:
-        return A_DIM;
-      case Style::Border:
-      case Style::Plain:
-        return A_NORMAL;
-    }
-    return A_NORMAL;
-  }
+  const bool color = has_colors();
   switch (style) {
-    case Style::Border:
-      return COLOR_PAIR(2);
     case Style::Title:
-      return COLOR_PAIR(3) | A_BOLD;
+      return color ? COLOR_PAIR(3) | A_BOLD : A_BOLD | A_REVERSE;
     case Style::Accent:
-      return COLOR_PAIR(4) | A_BOLD;
+      return color ? COLOR_PAIR(4) | A_BOLD : A_BOLD;
     case Style::Good:
-      return COLOR_PAIR(5);
+      return color ? COLOR_PAIR(5) : A_BOLD;
     case Style::Warn:
-      return COLOR_PAIR(1);
+      return color ? COLOR_PAIR(1) : A_BOLD;
     case Style::Dim:
       return A_DIM;
+    case Style::Border:
+      return color ? COLOR_PAIR(2) : A_NORMAL;
     case Style::Plain:
       return A_NORMAL;
   }

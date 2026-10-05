@@ -165,23 +165,17 @@ std::vector<ClientTraffic> MonitorState::clients() const {
   return result;
 }
 
-uint64_t MonitorState::total_rx_rate() const {
+uint64_t MonitorState::total_rate(uint64_t ClientTraffic::*field) const {
   uint64_t sum = 0;
-  for (const auto& [mac, tracked] : clients_) {
-    (void)mac;
-    sum = saturating_add(sum, tracked.traffic.rx_rate);
+  for (const auto& entry : clients_) {
+    sum = saturating_add(sum, entry.second.traffic.*field);
   }
   return sum;
 }
 
-uint64_t MonitorState::total_tx_rate() const {
-  uint64_t sum = 0;
-  for (const auto& [mac, tracked] : clients_) {
-    (void)mac;
-    sum = saturating_add(sum, tracked.traffic.tx_rate);
-  }
-  return sum;
-}
+uint64_t MonitorState::total_rx_rate() const { return total_rate(&ClientTraffic::rx_rate); }
+
+uint64_t MonitorState::total_tx_rate() const { return total_rate(&ClientTraffic::tx_rate); }
 
 std::vector<uint64_t> MonitorState::total_samples() const { return total_.samples(); }
 

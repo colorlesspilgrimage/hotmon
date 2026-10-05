@@ -62,6 +62,8 @@ class MonitorState {
 
   std::map<std::string, Tracked> clients_;
   Series total_;
+
+  uint64_t total_rate(uint64_t ClientTraffic::*field) const;
 };
 
 std::vector<ClientSnapshot> parse_station_dump(std::string_view text);
