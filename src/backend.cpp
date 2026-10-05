@@ -1,3 +1,5 @@
+#include <unistd.h>
+
 #include <format>
 #include "backend.hpp"
 
@@ -118,6 +120,26 @@ BackendKind select_backend(const ProbeFacts& facts) {
     return BackendKind::ExistingHostapd;
   }
   return BackendKind::DirectHostapd;
+}
+
+bool system_program_installed(std::string_view name) {
+  for (const char* dir : {"/usr/local/sbin", "/usr/sbin", "/usr/local/bin", "/usr/bin", "/sbin", "/bin"}) {
+    const auto path = std::filesystem::path(dir) / std::string(name);
+    if (::access(path.c_str(), X_OK) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Result<void> check_backend_tools(BackendKind kind, const Profile& profile,
+                                 const std::function<bool(std::string_view)>& installed) {
+  if (kind == BackendKind::NetworkManager && profile.dhcp_enabled && !installed("dnsmasq")) {
+    return unexpected_text(
+        "NetworkManager needs dnsmasq to give addresses to devices. Install the dnsmasq package, "
+        "or turn DHCP off in advanced setup.");
+  }
+  return {};
 }
 
 bool service_active(std::string_view unit) {

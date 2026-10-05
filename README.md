@@ -104,6 +104,8 @@ hotmon picks the backend itself. You do not choose one. It checks in this order 
 3. An existing hostapd setup, if hostapd is already configured (`/etc/hostapd/hostapd.conf`).
 4. hostapd with dnsmasq and nftables, if nothing else is managing Wi-Fi.
 
+With NetworkManager and DHCP on, NetworkManager runs dnsmasq itself to hand out addresses, so the `dnsmasq` package must be installed. hotmon checks for it before it asks for authorization.
+
 ## Saved settings
 
 Settings are stored in `$XDG_CONFIG_HOME/hotmon/profile.json`, or `~/.config/hotmon/profile.json` if that variable is not set. The file includes the passphrase in plain text, so hotmon restricts it to its owner. Do not copy it somewhere public.

@@ -14,9 +14,13 @@ Key key_char(char ch) { return Key{Key::Code::Char, static_cast<char32_t>(static
 Key key_enter() { return Key{Key::Code::Enter, 0, false}; }
 Key key_esc() { return Key{Key::Code::Esc, 0, false}; }
 
+bool every_program_installed(std::string_view) { return true; }
+
 App loaded_app(const std::filesystem::path& dir) {
-  return App::from_parts(BackendKind::NetworkManager, sample_interfaces(), dir / "profile.json",
-                         sample_profile());
+  auto app = App::from_parts(BackendKind::NetworkManager, sample_interfaces(), dir / "profile.json",
+                             sample_profile());
+  app.program_installed = every_program_installed;
+  return app;
 }
 
 Paths local_paths(const std::filesystem::path& dir) {
@@ -58,6 +62,26 @@ TEST(App, ConfirmSavesTheProfileAndShowsStatus) {
   ASSERT_TRUE(saved);
   EXPECT_EQ(saved->ssid, "Hotmon");
   EXPECT_FALSE(runner.calls.empty());
+  std::filesystem::remove_all(dir);
+}
+
+TEST(App, NetworkManagerDhcpWithoutDnsmasqStopsBeforeAuthorization) {
+  const auto dir = scratch_dir();
+  auto app = loaded_app(dir);
+  app.program_installed = [](std::string_view name) { return name != "dnsmasq"; };
+  const auto paths = local_paths(dir);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  auto error = apply_direct(app, runner, signals, paths);
+  ASSERT_FALSE(error);
+  EXPECT_NE(error.error().find("Install the dnsmasq package"), std::string::npos);
+  EXPECT_TRUE(runner.calls.empty());
+  EXPECT_FALSE(app.running);
+  EXPECT_FALSE(std::filesystem::exists(app.profile_path));
+  auto without_dhcp = sample_profile();
+  without_dhcp.dhcp_enabled = false;
+  EXPECT_TRUE(check_backend_tools(BackendKind::NetworkManager, without_dhcp, app.program_installed));
+  EXPECT_TRUE(check_backend_tools(BackendKind::Iwd, sample_profile(), app.program_installed));
   std::filesystem::remove_all(dir);
 }
 
@@ -232,6 +256,7 @@ TEST(App, StopRemovesTheManagerProfileItCreated) {
   const auto paths = local_paths(dir);
   auto app = App::from_parts(BackendKind::NetworkManager, sample_interfaces(), dir / "profile.json",
                              sample_profile());
+  app.program_installed = every_program_installed;
   ScriptedRunner apply_runner;
   RecordedSignals apply_signals;
   ASSERT_TRUE(apply_direct(app, apply_runner, apply_signals, paths));

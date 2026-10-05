@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,12 @@ enum class BackendKind { NetworkManager, Iwd, ExistingHostapd, DirectHostapd };
 
 const char* label(BackendKind kind);
 inline constexpr const char* DIRECT_TOOLS[] = {"hostapd", "dnsmasq", "nftables"};
+
+// Looks in the folders where NetworkManager looks for its helper programs.
+bool system_program_installed(std::string_view name);
+// NetworkManager runs dnsmasq itself for a shared (DHCP) hotspot and fails late without it.
+Result<void> check_backend_tools(BackendKind kind, const Profile& profile,
+                                 const std::function<bool(std::string_view)>& installed);
 
 struct ProbeFacts {
   bool network_manager_active = false;

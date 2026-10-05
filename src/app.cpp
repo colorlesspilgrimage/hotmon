@@ -81,6 +81,11 @@ Result<void> App::apply_hotspot(Privileged& privileged) {
     open_upstream_ok = false;
     return unexpected_text(notice);
   }
+  if (auto tools = check_backend_tools(backend, *profile, program_installed); !tools) {
+    wizard.set_error(tools.error());
+    notice = tools.error();
+    return unexpected_text(tools.error());
+  }
   auto report = privileged.apply(backend, *profile);
   if (!report) {
     if (running) {

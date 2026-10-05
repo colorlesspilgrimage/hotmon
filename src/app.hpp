@@ -48,6 +48,7 @@ struct App {
   CaptureControl capture;
   std::vector<IfaceInfo> interfaces;
   HostFacts facts;
+  std::function<bool(std::string_view)> program_installed = system_program_installed;
   std::string notice;
   std::filesystem::path profile_path;
   bool running = false;
