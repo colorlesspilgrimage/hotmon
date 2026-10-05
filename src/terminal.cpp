@@ -99,6 +99,42 @@ void open_capture(App& app) {
   }
 }
 
+int attr_for(Style style) {
+  if (!has_colors()) {
+    switch (style) {
+      case Style::Title:
+        return A_BOLD | A_REVERSE;
+      case Style::Accent:
+      case Style::Good:
+      case Style::Warn:
+        return A_BOLD;
+      case Style::Dim:
+        return A_DIM;
+      case Style::Border:
+      case Style::Plain:
+        return A_NORMAL;
+    }
+    return A_NORMAL;
+  }
+  switch (style) {
+    case Style::Border:
+      return COLOR_PAIR(2);
+    case Style::Title:
+      return COLOR_PAIR(3) | A_BOLD;
+    case Style::Accent:
+      return COLOR_PAIR(4) | A_BOLD;
+    case Style::Good:
+      return COLOR_PAIR(5);
+    case Style::Warn:
+      return COLOR_PAIR(1);
+    case Style::Dim:
+      return A_DIM;
+    case Style::Plain:
+      return A_NORMAL;
+  }
+  return A_NORMAL;
+}
+
 }
 
 void install_signal_handlers() {
@@ -124,7 +160,14 @@ Terminal::Terminal() {
   timeout(200);
   start_color();
   use_default_colors();
-  init_pair(1, COLOR_YELLOW, -1);
+  if (has_colors()) {
+    init_pair(1, COLOR_YELLOW, -1);
+    init_pair(2, COLOR_CYAN, -1);
+    init_pair(3, COLOR_WHITE, -1);
+    init_pair(4, COLOR_CYAN, -1);
+    init_pair(5, COLOR_GREEN, -1);
+  }
+  bkgd(' ' | COLOR_PAIR(0));
 }
 
 Terminal::~Terminal() {
@@ -135,17 +178,13 @@ Terminal::~Terminal() {
 }
 
 void Terminal::draw(const App& app) {
-  const auto lines = render(app, COLS, LINES);
+  const auto lines = render_styled(app, COLS, LINES);
   erase();
   for (size_t row = 0; row < lines.size() && static_cast<int>(row) < LINES; ++row) {
-    if (row == 2) {
-      attron(COLOR_PAIR(1));
-    }
-    mvaddstr(static_cast<int>(row), 0, lines[row].c_str());
-    if (row == 2) {
-      attroff(COLOR_PAIR(1));
-    }
+    attrset(attr_for(lines[row].style));
+    mvaddstr(static_cast<int>(row), 0, lines[row].text.c_str());
   }
+  attrset(A_NORMAL);
   refresh();
 }
 
@@ -177,6 +216,7 @@ int run_ui(App& app) {
       continue;
     }
     if (rc == KEY_RESIZE) {
+      clearok(stdscr, TRUE);
       continue;
     }
     switch (app.on_key(key)) {

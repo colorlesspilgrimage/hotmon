@@ -4,6 +4,7 @@
 #include "text.hpp"
 
 #include <set>
+#include <chrono>
 #include <charconv>
 #include <limits>
 
@@ -45,6 +46,49 @@ uint64_t saturating_add(uint64_t left, uint64_t right) {
              : left + right;
 }
 
+uint64_t multiply_u64(uint64_t left, uint64_t right, uint64_t& high) {
+  const uint64_t left_lo = left & 0xffffffffULL;
+  const uint64_t left_hi = left >> 32;
+  const uint64_t right_lo = right & 0xffffffffULL;
+  const uint64_t right_hi = right >> 32;
+  const uint64_t low_low = left_lo * right_lo;
+  const uint64_t cross = (low_low >> 32) + (left_lo * right_hi & 0xffffffffULL) +
+                         (left_hi * right_lo & 0xffffffffULL);
+  high = left_hi * right_hi + (left_lo * right_hi >> 32) + (left_hi * right_lo >> 32) + (cross >> 32);
+  return (cross << 32) | (low_low & 0xffffffffULL);
+}
+
+uint64_t divide_u128(uint64_t high, uint64_t low, uint64_t divisor) {
+  if (divisor == 0 || high >= divisor) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  uint64_t quotient = 0;
+  uint64_t remainder = high;
+  for (int bit = 63; bit >= 0; --bit) {
+    const uint64_t top = remainder >> 63;
+    remainder = (remainder << 1) | ((low >> bit) & 1ULL);
+    if (top != 0 || remainder >= divisor) {
+      remainder -= divisor;
+      quotient |= 1ULL << static_cast<unsigned>(bit);
+    }
+  }
+  return quotient;
+}
+
+uint64_t bytes_per_second(uint64_t current, uint64_t reference, int64_t elapsed_ms) {
+  if (elapsed_ms <= 0 || current < reference) {
+    return 0;
+  }
+  const uint64_t delta = current - reference;
+  const auto elapsed = static_cast<uint64_t>(elapsed_ms);
+  if (elapsed == 1000) {
+    return delta;
+  }
+  uint64_t high = 0;
+  const uint64_t low = multiply_u64(delta, 1000, high);
+  return divide_u128(high, low, elapsed);
+}
+
 }
 
 Series::Series(size_t capacity) : capacity_(capacity) {}
@@ -67,7 +111,8 @@ std::vector<uint64_t> Series::samples() const {
 
 MonitorState::MonitorState() : total_(kGraphCapacity) {}
 
-void MonitorState::update(const std::vector<ClientSnapshot>& clients) {
+void MonitorState::update(const std::vector<ClientSnapshot>& clients,
+                          std::chrono::steady_clock::time_point now) {
   std::set<std::string> seen;
   uint64_t total_now = 0;
   for (const ClientSnapshot& client : clients) {
@@ -76,14 +121,29 @@ void MonitorState::update(const std::vector<ClientSnapshot>& clients) {
     total_now = saturating_add(total_now, bytes);
     seen.insert(mac);
     auto [entry, inserted] = clients_.try_emplace(mac);
+    Tracked& tracked = entry->second;
     if (inserted) {
-      entry->second.mac = mac;
-      entry->second.graph = Series(kGraphCapacity);
+      tracked.traffic.mac = mac;
+      tracked.traffic.graph = Series(kGraphCapacity);
+      tracked.ref_rx = client.rx_bytes;
+      tracked.ref_tx = client.tx_bytes;
+      tracked.ref_time = now;
+      tracked.has_ref = true;
+      tracked.traffic.rx_rate = 0;
+      tracked.traffic.tx_rate = 0;
+    } else if (tracked.has_ref && now - tracked.ref_time >= std::chrono::seconds(1)) {
+      const auto elapsed_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(now - tracked.ref_time).count();
+      tracked.traffic.rx_rate = bytes_per_second(client.rx_bytes, tracked.ref_rx, elapsed_ms);
+      tracked.traffic.tx_rate = bytes_per_second(client.tx_bytes, tracked.ref_tx, elapsed_ms);
+      tracked.ref_rx = client.rx_bytes;
+      tracked.ref_tx = client.tx_bytes;
+      tracked.ref_time = now;
     }
-    entry->second.ip = client.ip;
-    entry->second.rx_bytes = client.rx_bytes;
-    entry->second.tx_bytes = client.tx_bytes;
-    entry->second.graph.observe(bytes);
+    tracked.traffic.ip = client.ip;
+    tracked.traffic.rx_bytes = client.rx_bytes;
+    tracked.traffic.tx_bytes = client.tx_bytes;
+    tracked.traffic.graph.observe(bytes);
   }
   for (auto it = clients_.begin(); it != clients_.end();) {
     if (!seen.contains(it->first)) {
@@ -98,11 +158,29 @@ void MonitorState::update(const std::vector<ClientSnapshot>& clients) {
 std::vector<ClientTraffic> MonitorState::clients() const {
   std::vector<ClientTraffic> result;
   result.reserve(clients_.size());
-  for (const auto& [mac, client] : clients_) {
+  for (const auto& [mac, tracked] : clients_) {
     (void)mac;
-    result.push_back(client);
+    result.push_back(tracked.traffic);
   }
   return result;
+}
+
+uint64_t MonitorState::total_rx_rate() const {
+  uint64_t sum = 0;
+  for (const auto& [mac, tracked] : clients_) {
+    (void)mac;
+    sum = saturating_add(sum, tracked.traffic.rx_rate);
+  }
+  return sum;
+}
+
+uint64_t MonitorState::total_tx_rate() const {
+  uint64_t sum = 0;
+  for (const auto& [mac, tracked] : clients_) {
+    (void)mac;
+    sum = saturating_add(sum, tracked.traffic.tx_rate);
+  }
+  return sum;
 }
 
 std::vector<uint64_t> MonitorState::total_samples() const { return total_.samples(); }
