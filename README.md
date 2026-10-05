@@ -12,6 +12,33 @@ hotmon is a terminal program for running a Wi-Fi hotspot on Linux. You set the h
 - Can capture packets on the hotspot interface.
 - Saves your settings so the next run starts from them.
 
+## Dependencies
+
+Install these before you start hotmon. The package names are the Arch Linux ones. Other distributions use similar names.
+
+Always needed:
+
+- `ncurses` and `yyjson`, the libraries hotmon links against.
+- `polkit`, for `pkexec`. You also need a polkit agent or a terminal for the prompt. Not needed if you start hotmon as root.
+- `iw`, for interface details and the connected-devices list.
+- `iproute2`, for `ip`.
+- `systemd`, for `systemctl`, which hotmon uses to find the backend.
+
+Needed for the backend hotmon picks (see [Backends](#backends)):
+
+| Backend | Packages |
+| --- | --- |
+| NetworkManager | `networkmanager`, and `dnsmasq` when DHCP is on |
+| iwd | `iwd` |
+| Existing hostapd setup | `hostapd`, `nftables`, and `dnsmasq` when DHCP is on |
+| hostapd, dnsmasq and nftables | `hostapd`, `nftables`, and `dnsmasq` when DHCP is on |
+
+DHCP is on by default, so plan on installing `dnsmasq`. On Arch with NetworkManager:
+
+```
+sudo pacman -S --needed ncurses yyjson polkit iw iproute2 dnsmasq
+```
+
 ## Build
 
 You need a C++23 compiler, CMake 3.20 or newer, ncurses (wide-character build), yyjson, GoogleTest and pkgconf.
@@ -39,10 +66,10 @@ A polkit agent or a terminal must be available.
 
 ## The wizard
 
-You move through these pages: interface, SSID, security, passphrase, upstream, band and channel, address and DHCP, then a review page.
+You move through these pages: interface, SSID, security, passphrase, upstream, band and channel, address and DHCP, then a review page. The passphrase page is skipped for an open network.
 
 - Security is a pick list: Open, WPA2 or WPA3. The default is WPA2.
-- A passphrase must be 8 to 63 printable ASCII characters. Leave it empty for an open network.
+- A passphrase must be 8 to 63 printable ASCII characters.
 - The default band is 5 GHz on channel 36. The compatibility choice is 2.4 GHz on channel 6.
 - On the address page, press `a` to open the advanced settings. Press `d` to go back to the automatic ones.
 - The upstream page starts on None. If you choose an open network and also share an upstream connection, hotmon warns you and asks for a second confirmation before it applies anything.
