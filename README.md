@@ -1,43 +1,70 @@
 # hotmon
 
-A small terminal program for running a Wi-Fi hotspot on Linux. You walk through a short wizard, start the hotspot, and watch who's on it. Written in C++23.
+Terminal UI for a Linux Wi-Fi hotspot. Set the name, the password, and whether clients get internet, then see who is connected and how much traffic they're moving. It does not ship its own access-point stack. It drives NetworkManager, iwd, or hostapd, whichever is already there.
 
-## What it does
-
-You pick the Wi-Fi interface, the network name, security (open, WPA2, or WPA3), a passphrase, and optionally an upstream interface if you want clients to reach the internet. Band, channel, and the address and DHCP ranges are filled in for you. There's an advanced page if you want to change them.
-
-Once it's up, hotmon shows status and live traffic on the hotspot interface, including each connected device with current and total bandwidth in both directions. You can also capture packets on that interface. Settings are saved, so the next run starts from where you left off. Starting, stopping, and capturing all go through whatever your system already has (NetworkManager, iwd, or hostapd), not a stack hotmon installs itself.
+C++23, ncurses.
 
 ## Dependencies
 
-Package names below are Arch's. Other distros call them something similar.
+One set to compile it, another for the tools it shells out to.
 
-You always need:
+### Build
 
-- `ncurses` and `yyjson`, which hotmon links against
-- `polkit`, for `pkexec`. You also need a polkit agent, or a terminal for the prompt. Skip this if you run hotmon as root.
-- `iw`, for interface details and the device list
-- `iproute2`, for `ip`
-- `systemd`, because hotmon uses `systemctl` to figure out which backend is running
+A C++23 compiler, CMake 3.20 or newer, pkg-config, wide-character ncurses, yyjson, and GoogleTest. GoogleTest is only for `ctest`.
 
-Which extra packages you need depends on the backend hotmon picks. See [Backends](#backends).
-
-| Backend | Packages |
+| | packages |
 | --- | --- |
-| NetworkManager | `networkmanager`, and `dnsmasq` when DHCP is on |
-| iwd | `iwd` |
-| Existing hostapd setup | `hostapd`, `nftables`, and `dnsmasq` when DHCP is on |
-| hostapd, dnsmasq and nftables | `hostapd`, `nftables`, and `dnsmasq` when DHCP is on |
+| Arch | `base-devel cmake pkgconf ncurses yyjson gtest` |
+| Debian, Ubuntu | `g++ cmake pkgconf libncurses-dev libyyjson-dev libgtest-dev` |
+| Fedora | `gcc-c++ cmake pkgconf-pkg-config ncurses-devel yyjson-devel gtest-devel` |
+| openSUSE | `gcc-c++ cmake pkgconf-pkg-config ncurses-devel yyjson-devel gtest` |
 
-DHCP is on by default, so you'll almost certainly want `dnsmasq`. On Arch, if you're using NetworkManager:
+`libyyjson-dev` is in Debian 13 and Ubuntu 25.04 and later. It is not in Debian 12 or Ubuntu 24.04. On openSUSE, `yyjson-devel` is in Tumbleweed, not in Leap. Fedora has had it for a while. If your repos don't have it, build [yyjson](https://github.com/ibireme/yyjson) and install that.
+
+### Runtime
+
+| | Arch | Debian / Ubuntu | Fedora | openSUSE |
+| --- | --- | --- | --- | --- |
+| `pkexec` | `polkit` | `pkexec` | `polkit` | `pkexec` |
+| `iw` | `iw` | `iw` | `iw` | `iw` |
+| `ip` | `iproute2` | `iproute2` | `iproute` | `iproute2` |
+| NetworkManager | `networkmanager` | `network-manager` | `NetworkManager` | `NetworkManager` |
+| iwd | `iwd` | `iwd` | `iwd` | `iwd` |
+| hostapd | `hostapd` | `hostapd` | `hostapd` | `hostapd` |
+| nftables | `nftables` | `nftables` | `nftables` | `nftables` |
+| dnsmasq | `dnsmasq` | `dnsmasq` | `dnsmasq` | `dnsmasq` |
+
+You don't install the whole table. `iw`, `ip`, and `pkexec` are for hotmon. The rest are backends, and you only need the one it will use. See [Which backend](#which-backend). DHCP is on unless you turn it off, so install `dnsmasq` too. `systemctl` comes with systemd.
+
+`pkexec` is what asks for your password or fingerprint. A polkit agent (the admin dialog your desktop already uses) shows a GUI. On a bare tty it asks in the terminal. Running hotmon as root skips the prompt. On older Ubuntu, before `pkexec` was split out, that binary came from `policykit-1`.
+
+Arch, assuming NetworkManager:
 
 ```
-sudo pacman -S --needed ncurses yyjson polkit iw iproute2 dnsmasq
+sudo pacman -S --needed base-devel cmake pkgconf ncurses yyjson gtest polkit iw iproute2 dnsmasq
 ```
+
+Debian, or Ubuntu 25.04 and newer:
+
+```
+sudo apt install g++ cmake pkgconf libncurses-dev libyyjson-dev libgtest-dev pkexec iw iproute2 dnsmasq
+```
+
+Fedora:
+
+```
+sudo dnf install gcc-c++ cmake pkgconf-pkg-config ncurses-devel yyjson-devel gtest-devel polkit iw iproute dnsmasq
+```
+
+openSUSE Tumbleweed:
+
+```
+sudo zypper install gcc-c++ cmake pkgconf-pkg-config ncurses-devel yyjson-devel gtest pkexec iw iproute2 dnsmasq
+```
+
+Those are build deps plus the usual runtime deps. They do not install NetworkManager. Add `networkmanager`, `network-manager`, or `NetworkManager` if you don't already have it, or skip it and use iwd or hostapd.
 
 ## Build
-
-You need a C++23 compiler, CMake 3.20 or newer, a wide-character build of ncurses, yyjson, GoogleTest, and pkgconf.
 
 ```
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -47,71 +74,53 @@ ctest --test-dir build --output-on-failure
 
 The binary is `build/hotmon`.
 
-## Run
+## Running it
 
 ```
 build/hotmon
 ```
 
-Open the wizard as your normal user. You don't need `sudo` just to look at the settings. hotmon asks for your admin password (or a fingerprint) when it actually starts the hotspot, and again when it stops it or starts a capture. That prompt comes from `pkexec` in the `polkit` package, so a polkit agent or a terminal has to be around to show it.
+No sudo to open the wizard. It asks when it starts the hotspot, stops it, or starts a capture.
 
-`sudo build/hotmon` still works, and it won't ask again.
+Wizard order: interface, SSID, security, passphrase, upstream, band and channel, addresses, review. Open networks skip the passphrase. Security is Open, WPA2, or WPA3, default WPA2. A passphrase is 8 to 63 printable ASCII characters. The radio defaults to 5 GHz channel 36; the compatibility choice is 2.4 GHz channel 6. On the address page, `a` opens the manual settings and `d` puts the automatic ones back.
 
-## The wizard
+Upstream starts on None. An open network that also shares your upstream connection gets a warning and a second confirmation before anything is applied.
 
-The pages, in order: interface, SSID, security, passphrase, upstream, band and channel, address and DHCP, then a review page. An open network skips the passphrase page.
+Once the hotspot is up:
 
-- Security is a list: Open, WPA2, or WPA3. WPA2 is the default.
-- A passphrase has to be 8 to 63 printable ASCII characters.
-- The default band is 5 GHz on channel 36. If you need something older gear can join, use 2.4 GHz on channel 6.
-- On the address page, `a` opens the advanced settings and `d` puts the automatic ones back.
-- The upstream page starts on None. If you pick an open network and also share an upstream connection, hotmon warns you and asks you to confirm a second time before it applies anything.
-
-## Keys while the hotspot is running
-
-| Key | Action |
+| key | |
 | --- | --- |
-| `m` | Traffic monitor |
-| `s` or `Esc` | Back to the status view |
-| `w` | Reopen the wizard |
-| `c` | Start a packet capture (asks first) |
-| `z` | Stop the capture |
-| `k` | Stop the hotspot |
-| `q` | Quit |
+| `m` | traffic |
+| `s`, `Esc` | back to status |
+| `w` | wizard again |
+| `c` | start a capture (asks first) |
+| `z` | stop the capture |
+| `k` | stop the hotspot |
+| `q` | quit |
 
-## Status view
+Status is a table of clients: device, address, down, up, total down, total up. Down is traffic toward the client. The title line has the client count and the combined rate. It uses the whole terminal. A UTF-8 locale gets box drawing; otherwise `+`, `-`, and `|`.
 
-Connected devices show up as a table: Device, Address, Down, Up, Total down, Total up. Down is traffic sent to the device; up is traffic coming from it. The panel title shows how many devices are connected and the combined speeds.
+Capture only reads frames on the hotspot interface. `c` shows a warning, Enter starts it.
 
-The UI uses the whole terminal. With a UTF-8 locale you get real box-drawing characters. Otherwise it falls back to `+`, `-`, and `|`.
+## Which backend
 
-## Packet capture
-
-Press `c` and you'll get a warning. Capture starts after you press Enter, and only after authorization. It only reads frames on the hotspot interface. It doesn't rewrite them.
-
-## Authorization
-
-Starting the hotspot, stopping it, and starting a capture all ask first. Cancel and nothing happens. At the text prompt, Ctrl+C cancels the prompt without quitting hotmon, and the notice says authorization was cancelled. If the check itself fails, the notice says authorization failed.
-
-hotmon never sees the password. The system authentication agent handles that. It starts `pkexec` from a known system path (like `/usr/bin`) instead of searching `PATH`, and `pkexec` re-runs that same hotmon binary as root.
-
-That's worth knowing: if your user can rewrite the binary, anything running as you can rewrite it too, and then it runs as root the next time you authorize. For daily use, put hotmon somewhere only root can change, such as `/usr/local/bin`.
-
-## Backends
-
-You don't pick a backend. hotmon checks in this order and uses the first one that fits:
+You don't pick. First match:
 
 1. NetworkManager, if that service is active.
 2. iwd, if that service is active.
-3. An existing hostapd setup, if `/etc/hostapd/hostapd.conf` is already there.
-4. hostapd with dnsmasq and nftables, if nothing else is managing Wi-Fi.
+3. An existing hostapd config, if `/etc/hostapd/hostapd.conf` is already there.
+4. hostapd, dnsmasq, and nftables, if nothing else is managing Wi-Fi.
 
-With NetworkManager and DHCP on, NetworkManager runs dnsmasq itself to hand out addresses, so the `dnsmasq` package has to be installed. hotmon checks for it before it asks you to authorize.
+With NetworkManager and DHCP on, NetworkManager runs dnsmasq itself, but the `dnsmasq` package still has to be installed. hotmon checks for it before asking you to authorize.
 
-## Saved settings
+## Authorization
 
-Settings live in `$XDG_CONFIG_HOME/hotmon/profile.json`, or `~/.config/hotmon/profile.json` if that variable isn't set. The passphrase is stored in plain text, and the file is restricted to its owner. Don't copy it somewhere public.
+Start, stop, and capture each ask. Cancel, or hit Ctrl+C at the text prompt, and hotmon does not apply that action. It stays running. The notice says authorization was cancelled, or that it failed if the check itself failed.
 
-## Roadmap
+hotmon never sees the password. It execs `pkexec` from a fixed system directory such as `/usr/bin`, not from `PATH`, and `pkexec` re-runs that same hotmon binary as root. If your user can overwrite the binary, so can anything else running as you, and the next approved prompt is root. For anything you leave installed, put it somewhere only root can write, like `/usr/local/bin`.
 
-See `ROADMAP.md`.
+## Settings
+
+`$XDG_CONFIG_HOME/hotmon/profile.json`, or `~/.config/hotmon/profile.json`. The passphrase is plain text in that file. Permissions are owner-only. Don't copy it into a public dotfiles repo.
+
+`ROADMAP.md` is the rest.
