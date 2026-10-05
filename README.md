@@ -88,6 +88,12 @@ The notice says that authorization was cancelled.
 If the check fails, the notice says that authorization failed.
 hotmon never reads, stores, or sees the password.
 The system authentication agent does that work.
+hotmon starts `pkexec` from a system directory, such as `/usr/bin`.
+It does not search `PATH` for `pkexec`.
+`pkexec` runs the same hotmon file as root.
+If your user can change that file, a program that runs as your user can change it too.
+Then it runs as root after you authorize.
+For daily use, install hotmon in a directory that only root can change, such as `/usr/local/bin`.
 
 ## Backends
 
