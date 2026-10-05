@@ -4,7 +4,6 @@
 // A frame is a 4-byte big-endian length, then that many JSON bytes.
 // Reject a frame larger than 1 MiB.
 // The parent sends one request. The helper sends one response.
-// Request ops are apply, stop, and capture.
 // The helper does not read commands, paths, or pids from the request.
 // A capture response can also carry one file descriptor.
 
