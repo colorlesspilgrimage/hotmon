@@ -377,4 +377,93 @@ TEST(Render, StyledRowsMatchTextRows) {
   }
 }
 
+std::vector<ClientSnapshot> numbered_clients(int count) {
+  std::vector<ClientSnapshot> clients;
+  for (int index = 0; index < count; ++index) {
+    clients.push_back(ClientSnapshot{"aa:bb:cc:dd:ee:" + std::to_string(10 + index),
+                                     "192.168.42." + std::to_string(20 + index), 100, 200});
+  }
+  return clients;
+}
+
+bool has_row_with(const std::vector<std::string>& lines, const std::string& text) {
+  for (const std::string& line : lines) {
+    if (line.find(text) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TEST(Render, FooterWrapsAtWordBoundaries) {
+  setlocale(LC_ALL, "C");
+  auto app = App::from_parts(BackendKind::NetworkManager, sample_interfaces(), "/tmp/hotmon-footer-wrap.json",
+                             std::nullopt);
+  app.wizard.page = Page::Security;
+  EXPECT_TRUE(has_row_with(render(app, 80, 24), "Ctrl+q: quit"));
+  app.wizard.page = Page::AddressDhcp;
+  const auto lines = render(app, 100, 24);
+  EXPECT_TRUE(has_row_with(lines, "Ctrl+q: quit"));
+  EXPECT_TRUE(has_row_with(lines, "a: advanced setup"));
+  for (const std::string& line : lines) {
+    EXPECT_EQ(column_count(line), 100) << line;
+  }
+}
+
+TEST(Render, ControlCharactersDoNotBreakBoxes) {
+  setlocale(LC_ALL, "C");
+  auto app = plain_app("/tmp/hotmon-control.json");
+  app.view = View::Status;
+  app.running = true;
+  app.notice = "first\nsecond\tthird\x1b[2J\r\x7f end";
+  app.status = HotspotStatus::failed("The command failed:\nerror line\x1b[31m red");
+  app.monitor.update({ClientSnapshot{"aa:bb\n:cc", std::nullopt, 1, 2}});
+  for (View view : {View::Status, View::Monitor}) {
+    app.view = view;
+    const auto lines = render(app, 60, 24);
+    ASSERT_EQ(lines.size(), 24u);
+    for (const std::string& line : lines) {
+      EXPECT_EQ(column_count(line), 60) << line;
+      for (unsigned char byte : line) {
+        EXPECT_GE(byte, 0x20) << line;
+        EXPECT_NE(byte, 0x7F) << line;
+      }
+    }
+    EXPECT_TRUE(has_row_with(lines, "first second third"));
+  }
+}
+
+TEST(Render, KeysBoxStaysOnTheLastRows) {
+  setlocale(LC_ALL, "C");
+  auto app = plain_app("/tmp/hotmon-keys-bottom.json");
+  app.running = true;
+  app.status = HotspotStatus::running("Hotmon", "wlan0", "NetworkManager");
+  app.monitor.update(numbered_clients(6));
+  struct Case {
+    View view;
+    int width;
+    int height;
+  };
+  const Case cases[] = {{View::Monitor, 80, 24}, {View::Monitor, 80, 12}, {View::Monitor, 80, 16},
+                        {View::Status, 80, 12},  {View::Status, 80, 13},  {View::Status, 80, 14}};
+  for (const Case& item : cases) {
+    app.view = item.view;
+    const auto lines = render(app, item.width, item.height);
+    ASSERT_EQ(static_cast<int>(lines.size()), item.height);
+    EXPECT_EQ(lines.back().front(), '+') << item.width << "x" << item.height;
+    EXPECT_EQ(lines.back().back(), '+') << item.width << "x" << item.height;
+    EXPECT_TRUE(has_row_with(lines, "q: quit")) << item.width << "x" << item.height;
+    for (const std::string& line : lines) {
+      EXPECT_EQ(column_count(line), item.width) << line;
+    }
+  }
+  app.view = View::Monitor;
+  EXPECT_TRUE(has_row_with(render(app, 80, 24), "more devices."));
+  app.view = View::Status;
+  app.status = HotspotStatus::failed(std::string(600, 'x'));
+  const auto failed = render(app, 80, 16);
+  EXPECT_EQ(failed.back().front(), '+');
+  EXPECT_TRUE(has_row_with(failed, "q: quit"));
+}
+
 }

@@ -106,6 +106,22 @@ std::string repeat_unit(const std::string& unit, int count) {
   return out;
 }
 
+// Replace control characters with spaces. A control character moves the
+// terminal cursor, so it breaks the box layout.
+std::string printable(std::string text) {
+  for (size_t index = 0; index < text.size(); ++index) {
+    const auto byte = static_cast<unsigned char>(text[index]);
+    if (byte < 0x20 || byte == 0x7F) {
+      text[index] = ' ';
+    } else if (byte == 0xC2 && index + 1 < text.size() &&
+               static_cast<unsigned char>(text[index + 1]) >= 0x80 &&
+               static_cast<unsigned char>(text[index + 1]) <= 0x9F) {
+      text.replace(index, 2, " ");
+    }
+  }
+  return text;
+}
+
 std::string box_top(const BoxChars& box, const std::string& title, int width) {
   if (width < 2) {
     width = 2;
@@ -114,11 +130,12 @@ std::string box_top(const BoxChars& box, const std::string& title, int width) {
   if (title.empty() || inner < 4) {
     return box.tl + repeat_unit(box.h, inner) + box.tr;
   }
+  const std::string clean = printable(title);
   const int title_budget = inner - 3;
   int used = 0;
-  const size_t end = cut_columns(title, 0, title_budget, used);
+  const size_t end = cut_columns(clean, 0, title_budget, used);
   const int bars = inner - 3 - used;
-  return box.tl + box.h + " " + title.substr(0, end) + " " + repeat_unit(box.h, bars) + box.tr;
+  return box.tl + box.h + " " + clean.substr(0, end) + " " + repeat_unit(box.h, bars) + box.tr;
 }
 
 std::string box_bottom(const BoxChars& box, int width) {
@@ -130,9 +147,11 @@ std::string box_bottom(const BoxChars& box, int width) {
 
 std::string box_row(const BoxChars& box, const std::string& text, int width) {
   const int inner = std::max(width - 2, 0);
-  return box.v + pad(text, inner) + box.v;
+  return box.v + pad(printable(text), inner) + box.v;
 }
 
+// Wrap the text at spaces. Prefer a double space, because it separates the key items.
+// Cut a word only when it is wider than the line.
 std::vector<std::string> wrap_text(const std::string& text, int width) {
   if (width <= 0) {
     return {text};
@@ -146,8 +165,22 @@ std::vector<std::string> wrap_text(const std::string& text, int width) {
       int columns = 0;
       end = start + next_char(text, start, columns);
     }
+    size_t next = end;
+    if (end < text.size()) {
+      size_t space = text.rfind("  ", end);
+      if (space == std::string::npos || space <= start) {
+        space = text[end] == ' ' ? end : text.rfind(' ', end - 1);
+      }
+      if (space != std::string::npos && space > start) {
+        end = space;
+        next = space;
+      }
+    }
     lines.push_back(text.substr(start, end - start));
-    start = end;
+    start = next;
+    while (start < text.size() && text[start] == ' ') {
+      ++start;
+    }
   }
   if (lines.empty()) {
     lines.emplace_back();
@@ -471,12 +504,17 @@ std::vector<StyledRow> status_lines(const App& app, int width, const BoxChars& b
   }
   std::vector<StyledRow> lines;
   append_box(lines, box, "Status", body, width, true, 0);
-  int device_rows = 0;
-  if (stretch) {
-    device_rows = body_rows - static_cast<int>(lines.size());
-    if (device_rows < 3) {
-      device_rows = 3;
-    }
+  if (!stretch) {
+    const auto devices = devices_panel(app, width, box, 0);
+    lines.insert(lines.end(), devices.begin(), devices.end());
+    return lines;
+  }
+  const int device_rows = body_rows - static_cast<int>(lines.size());
+  if (device_rows < 3) {
+    // The devices panel has no space. Stretch the status box so the keys box stays at the bottom.
+    lines.clear();
+    append_box(lines, box, "Status", body, width, true, body_rows);
+    return lines;
   }
   const auto devices = devices_panel(app, width, box, device_rows);
   lines.insert(lines.end(), devices.begin(), devices.end());
@@ -489,9 +527,27 @@ std::vector<StyledRow> monitor_lines(const App& app, int width, const BoxChars& 
   append_box(total, box, "Total traffic",
              {StyledRow{sparkline_text(app.monitor.total_samples(), std::max(width - 2, 1)), Style::Plain}},
              width, false, 0);
-  std::vector<StyledRow> devices;
+  const Style capture_style = app.capture.is_running() ? Style::Good : Style::Dim;
+  std::vector<StyledRow> packet_rows_text = {
+      StyledRow{app.capture.is_running() ? "Capture is active." : "Capture is stopped.", capture_style}};
+  const auto recent = app.capture.recent_lines(4);
+  if (recent.empty()) {
+    packet_rows_text.emplace_back(StyledRow{"No packets.", Style::Dim});
+  } else {
+    for (const std::string& line : recent) {
+      packet_rows_text.push_back(StyledRow{line, Style::Plain});
+    }
+  }
   const auto clients = app.monitor.clients();
-  const size_t shown = std::min<size_t>(clients.size(), 4);
+  size_t shown = std::min<size_t>(clients.size(), 4);
+  if (stretch) {
+    // Show only the device boxes that fit, so the keys box stays on screen.
+    const int room = body_rows - static_cast<int>(total.size() + packet_rows_text.size() + 2);
+    while (shown > 0 && static_cast<int>(shown) * 3 + (clients.size() > shown ? 1 : 0) > room) {
+      --shown;
+    }
+  }
+  std::vector<StyledRow> devices;
   for (size_t index = 0; index < shown; ++index) {
     const auto& client = clients[index];
     const std::string title = client.mac + " down " + format_bytes(client.tx_bytes) + " up " +
@@ -516,17 +572,6 @@ std::vector<StyledRow> monitor_lines(const App& app, int width, const BoxChars& 
     }
   }
   std::vector<StyledRow> packets;
-  const Style capture_style = app.capture.is_running() ? Style::Good : Style::Dim;
-  std::vector<StyledRow> packet_rows_text = {
-      StyledRow{app.capture.is_running() ? "Capture is active." : "Capture is stopped.", capture_style}};
-  const auto recent = app.capture.recent_lines(4);
-  if (recent.empty()) {
-    packet_rows_text.emplace_back(StyledRow{"No packets.", Style::Dim});
-  } else {
-    for (const std::string& line : recent) {
-      packet_rows_text.push_back(StyledRow{line, Style::Plain});
-    }
-  }
   append_box(packets, box, "Packets", packet_rows_text, width, false, packet_rows);
   std::vector<StyledRow> lines = total;
   lines.insert(lines.end(), packets.begin(), packets.end());
@@ -593,6 +638,13 @@ std::vector<StyledRow> render_styled(const App& app, int width, int height) {
     body = monitor_lines(app, width, box, body_budget, stretch);
   } else {
     body = status_lines(app, width, box, body_budget, stretch);
+  }
+  if (stretch && static_cast<int>(body.size()) > body_budget) {
+    // Cut the body so the keys box stays on the last rows. Close the cut box with a bottom border.
+    body.resize(static_cast<size_t>(body_budget));
+    if (!body.empty()) {
+      body.back() = StyledRow{box_bottom(box, width), Style::Border};
+    }
   }
   std::vector<StyledRow> lines;
   lines.reserve(static_cast<size_t>(std::max(height, 1)));
