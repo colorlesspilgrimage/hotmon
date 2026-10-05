@@ -149,9 +149,7 @@ std::string printable(std::string text) {
 }
 
 std::string box_top(const BoxChars& box, const std::string& title, int width) {
-  if (width < 2) {
-    width = 2;
-  }
+  width = std::max(width, 2);
   const int inner = width - 2;
   if (title.empty() || inner < 4) {
     return box.tl + repeat_unit(box.h, inner) + box.tr;
@@ -165,9 +163,7 @@ std::string box_top(const BoxChars& box, const std::string& title, int width) {
 }
 
 std::string box_bottom(const BoxChars& box, int width) {
-  if (width < 2) {
-    width = 2;
-  }
+  width = std::max(width, 2);
   return box.bl + repeat_unit(box.h, width - 2) + box.br;
 }
 
@@ -229,10 +225,7 @@ void append_box(std::vector<StyledRow>& lines, const BoxChars& box, const std::s
   }
   const int content = static_cast<int>(inner.size());
   const int target = std::max(min_rows, content + 2);
-  int blanks = target - 2 - content;
-  if (blanks < 0) {
-    blanks = 0;
-  }
+  const int blanks = std::max(target - 2 - content, 0);
   lines.push_back(StyledRow{box_top(box, title, width), Style::Border});
   for (const StyledRow& row : inner) {
     lines.push_back(StyledRow{box_row(box, row.text, width), row.style});
@@ -345,6 +338,16 @@ struct TableColumn {
   bool right = false;
 };
 
+void shrink_columns(std::vector<int>& widths, const std::vector<int>& floors, int& over) {
+  const int count = static_cast<int>(widths.size());
+  for (int index = count - 1; index >= 0 && over > 0; --index) {
+    const int room = widths[static_cast<size_t>(index)] - floors[static_cast<size_t>(index)];
+    const int cut = std::min(std::max(room, 0), over);
+    widths[static_cast<size_t>(index)] -= cut;
+    over -= cut;
+  }
+}
+
 std::vector<std::string> table_rows(const std::vector<TableColumn>& columns,
                                     const std::vector<std::vector<std::string>>& rows, int width) {
   const int count = static_cast<int>(columns.size());
@@ -382,18 +385,9 @@ std::vector<std::string> table_rows(const std::vector<TableColumn>& columns,
     }
   } else if (sum > width) {
     int over = sum - width;
-    for (int index = count - 1; index >= 0 && over > 0; --index) {
-      const int floor = minimum[static_cast<size_t>(index)];
-      const int can = preferred[static_cast<size_t>(index)] - floor;
-      const int cut = std::min(std::max(can, 0), over);
-      preferred[static_cast<size_t>(index)] -= cut;
-      over -= cut;
-    }
-    for (int index = count - 1; index >= 0 && over > 0; --index) {
-      const int can = preferred[static_cast<size_t>(index)] - 1;
-      const int cut = std::min(std::max(can, 0), over);
-      preferred[static_cast<size_t>(index)] -= cut;
-      over -= cut;
+    shrink_columns(preferred, minimum, over);
+    if (over > 0) {
+      shrink_columns(preferred, std::vector<int>(preferred.size(), 1), over);
     }
   }
   auto emit = [&](const std::vector<std::string>& cells) {
@@ -420,14 +414,29 @@ std::vector<std::string> table_rows(const std::vector<TableColumn>& columns,
   return out;
 }
 
+std::string more_devices_text(size_t count) {
+  return std::to_string(count) + " more devices.";
+}
+
+void append_table_rows(std::vector<StyledRow>& content, const std::vector<std::string>& table,
+                       int row_limit) {
+  if (table.empty() || row_limit <= 0) {
+    return;
+  }
+  content.push_back(StyledRow{table.front(), Style::Title});
+  const int last = std::min(row_limit, static_cast<int>(table.size()));
+  for (int index = 1; index < last; ++index) {
+    content.push_back(StyledRow{table[static_cast<size_t>(index)], Style::Plain});
+  }
+}
+
 std::string devices_title(const App& app) {
   const std::string count = std::to_string(app.monitor.clients().size());
   const std::string down = format_rate(app.monitor.total_tx_rate());
   const std::string up = format_rate(app.monitor.total_rx_rate());
-  if (utf8_locale()) {
-    return "Devices (" + count + ")  ↓ " + down + "  ↑ " + up;
-  }
-  return "Devices (" + count + ")  Down " + down + "  Up " + up;
+  const char* down_word = utf8_locale() ? "↓" : "Down";
+  const char* up_word = utf8_locale() ? "↑" : "Up";
+  return "Devices (" + count + ")  " + down_word + " " + down + "  " + up_word + " " + up;
 }
 
 std::vector<std::string> device_table(const std::vector<ClientTraffic>& clients, int inner) {
@@ -475,25 +484,14 @@ std::vector<StyledRow> devices_panel(const App& app, int width, const BoxChars& 
   } else {
     const auto table = device_table(clients, std::max(width - 2, 0));
     if (static_cast<int>(table.size()) <= slots) {
-      if (!table.empty()) {
-        content.push_back(StyledRow{table.front(), Style::Title});
-      }
-      for (size_t index = 1; index < table.size(); ++index) {
-        content.push_back(StyledRow{table[index], Style::Plain});
-      }
+      append_table_rows(content, table, static_cast<int>(table.size()));
     } else if (slots <= 1) {
-      content.push_back(
-          StyledRow{std::to_string(clients.size()) + " more devices.", Style::Dim});
+      content.push_back(StyledRow{more_devices_text(clients.size()), Style::Dim});
     } else {
       const int shown = std::max(slots - 2, 0);
-      if (!table.empty()) {
-        content.push_back(StyledRow{table.front(), Style::Title});
-      }
-      for (int index = 0; index < shown && index + 1 < static_cast<int>(table.size()); ++index) {
-        content.push_back(StyledRow{table[static_cast<size_t>(index + 1)], Style::Plain});
-      }
+      append_table_rows(content, table, shown + 1);
       const int hidden = static_cast<int>(clients.size()) - shown;
-      content.push_back(StyledRow{std::to_string(hidden) + " more devices.", Style::Dim});
+      content.push_back(StyledRow{more_devices_text(static_cast<size_t>(hidden)), Style::Dim});
     }
   }
   std::vector<StyledRow> lines;
@@ -586,16 +584,12 @@ std::vector<StyledRow> monitor_lines(const App& app, int width, const BoxChars& 
     append_box(devices, box, "Devices", {StyledRow{"No devices are connected.", Style::Dim}}, width,
                false, 0);
   } else if (clients.size() > shown) {
-    devices.push_back(
-        StyledRow{pad(std::to_string(clients.size() - shown) + " more devices.", width), Style::Dim});
+    devices.push_back(StyledRow{pad(more_devices_text(clients.size() - shown), width), Style::Dim});
   }
   const int fixed = static_cast<int>(total.size() + devices.size());
   int packet_rows = 0;
   if (stretch) {
-    packet_rows = body_rows - fixed;
-    if (packet_rows < 0) {
-      packet_rows = 0;
-    }
+    packet_rows = std::max(body_rows - fixed, 0);
   }
   std::vector<StyledRow> packets;
   append_box(packets, box, "Packets", packet_rows_text, width, false, packet_rows);
@@ -643,20 +637,14 @@ std::string sparkline_text(const std::vector<uint64_t>& samples, int width) {
 }
 
 std::vector<StyledRow> render_styled(const App& app, int width, int height) {
-  if (width < 2) {
-    width = 2;
-  }
-  if (height < 1) {
-    height = 1;
-  }
+  width = std::max(width, 2);
+  height = std::max(height, 1);
   const BoxChars box = box_chars();
   const bool stretch = height >= 12;
   const std::vector<StyledRow> header = header_lines(app, width, box);
   const std::vector<StyledRow> footer = footer_box(app, width, box);
-  int body_budget = height - static_cast<int>(header.size()) - static_cast<int>(footer.size());
-  if (body_budget < 0) {
-    body_budget = 0;
-  }
+  const int body_budget =
+      std::max(height - static_cast<int>(header.size()) - static_cast<int>(footer.size()), 0);
   std::vector<StyledRow> body;
   if (app.view == View::Wizard) {
     body = wizard_lines(app, width, box, stretch ? body_budget : 0);
