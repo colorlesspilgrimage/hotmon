@@ -32,7 +32,8 @@ BoxChars box_chars() {
 }
 
 // Return the byte length of the UTF-8 sequence at index. Set columns to its screen width.
-size_t next_char(const std::string& text, size_t index, int& columns) {
+// Set printable to false for a control character. A control character uses one column.
+size_t next_char(const std::string& text, size_t index, int& columns, bool& printable) {
   const auto byte = static_cast<unsigned char>(text[index]);
   size_t length = 1;
   char32_t code = byte;
@@ -52,9 +53,36 @@ size_t next_char(const std::string& text, size_t index, int& columns) {
     code = (code << 6) | (static_cast<unsigned char>(text[index + used]) & 0x3F);
     ++used;
   }
-  const int width = used == length ? ::wcwidth(static_cast<wchar_t>(code)) : -1;
+  const bool control = used == length && (code < 0x20 || (code >= 0x7F && code < 0xA0));
+  const int width = used == length && !control ? ::wcwidth(static_cast<wchar_t>(code)) : -1;
+  printable = !control;
   columns = width < 0 ? 1 : width;
   return used;
+}
+
+size_t next_char(const std::string& text, size_t index, int& columns) {
+  bool printable = true;
+  return next_char(text, index, columns, printable);
+}
+
+// Replace each control character with '?'.
+// The terminal then cannot get cursor movement or escape bytes from the text.
+std::string printable_text(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  size_t index = 0;
+  while (index < text.size()) {
+    int columns = 0;
+    bool printable = true;
+    const size_t length = next_char(text, index, columns, printable);
+    if (printable) {
+      out.append(text, index, length);
+    } else {
+      out.push_back('?');
+    }
+    index += length;
+  }
+  return out;
 }
 
 // Cut the text at a character boundary so that it uses at most width columns.
@@ -658,7 +686,7 @@ std::vector<StyledRow> render_styled(const App& app, int width, int height) {
     lines.resize(static_cast<size_t>(height));
   }
   for (StyledRow& row : lines) {
-    row.text = pad(row.text, width);
+    row.text = pad(printable_text(row.text), width);
   }
   return lines;
 }
