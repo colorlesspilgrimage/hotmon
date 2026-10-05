@@ -370,13 +370,12 @@ TEST(App, FailedReapplyKeepsThePrivateHostapdStopPath) {
 
 class CancelPrivileged : public Privileged {
  public:
-  Result<StartReport> apply(BackendKind, const Profile&) override {
-    return unexpected_text("Authorization was cancelled. The action was not done.");
-  }
-  Result<void> stop(const StopRequest&) override {
-    return unexpected_text("Authorization was cancelled. The action was not done.");
-  }
-  Result<FileDescriptor> open_capture_socket(std::string_view) override {
+  Result<StartReport> apply(BackendKind, const Profile&) override { return cancelled(); }
+  Result<void> stop(const StopRequest&) override { return cancelled(); }
+  Result<FileDescriptor> open_capture_socket(std::string_view) override { return cancelled(); }
+
+ private:
+  static std::unexpected<std::string> cancelled() {
     return unexpected_text("Authorization was cancelled. The action was not done.");
   }
 };
