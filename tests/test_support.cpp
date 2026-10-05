@@ -4,7 +4,13 @@
 #include <iterator>
 
 #include <atomic>
+#include <chrono>
 #include <fstream>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace hotmon {
@@ -148,6 +154,55 @@ Result<std::optional<std::vector<uint8_t>>> FakeSource::try_recv() {
   auto frame = std::move(frames.front());
   frames.erase(frames.begin());
   return std::optional<std::vector<uint8_t>>(std::move(frame));
+}
+
+int loopback_connect(uint16_t port) {
+  const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (fd < 0) {
+    return -1;
+  }
+  sockaddr_in address = ipv4_endpoint(INADDR_LOOPBACK, port);
+  if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+    ::close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+bool poll_until_readable(FakeMii& server, int fd) {
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < end) {
+    server.poll();
+    pollfd entry{fd, POLLIN, 0};
+    if (::poll(&entry, 1, 10) > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string read_until_eof(FakeMii& server, int fd) {
+  std::string text;
+  char buffer[4096];
+  while (poll_until_readable(server, fd)) {
+    const ssize_t count = ::recv(fd, buffer, sizeof(buffer), 0);
+    if (count <= 0) {
+      break;
+    }
+    text.append(buffer, static_cast<size_t>(count));
+  }
+  return text;
+}
+
+std::string fakemii_exchange(FakeMii& server, std::string_view request) {
+  const int fd = loopback_connect(server.port());
+  if (fd < 0) {
+    return {};
+  }
+  (void)::send(fd, request.data(), request.size(), MSG_NOSIGNAL);
+  std::string reply = read_until_eof(server, fd);
+  ::close(fd);
+  return reply;
 }
 
 }

@@ -210,6 +210,7 @@ int run_ui(App& app, Privileged& privileged) {
     }
     switch (app.on_key(key)) {
       case Step::Quit:
+        app.fakemii.stop();
         return 0;
       case Step::Apply:
         show_wait(terminal, app);

@@ -3,6 +3,7 @@
 #include "backend.hpp"
 #include "privilege.hpp"
 #include "capture.hpp"
+#include "fakemii.hpp"
 #include "iface.hpp"
 #include "monitor.hpp"
 #include "profile.hpp"
@@ -58,6 +59,9 @@ struct App {
   bool private_hostapd = false;
   bool open_extra = false;
   bool open_upstream_ok = false;
+  FakeMii fakemii;
+  // Tests set the port to 0 to get a free port. The program always uses FAKEMII_PORT.
+  uint16_t fakemii_port = FAKEMII_PORT;
 
   static Result<App> boot();
   static App from_parts(BackendKind backend, std::vector<IfaceInfo> interfaces,
@@ -81,6 +85,7 @@ struct App {
   Step on_run_key(const Key& key, bool status_view);
   Step request_capture();
   Step accept_capture();
+  Step toggle_fakemii();
 };
 
 }

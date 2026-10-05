@@ -2,11 +2,6 @@
 
 ## Planned
 
-### FakeMii integration
-
-Fake the Nintendo 3DS connection test on the hotspot so a 3DS can join without real internet (for FTP, netloader, Input Redirection, and similar local tools).
-Reference: https://github.com/Lectem/FakeMii
-
 ## Done
 
 ### 1. Automatic network settings in the wizard
@@ -25,3 +20,11 @@ The UI fills the terminal and uses solid lines.
 hotmon asks for the admin password or a fingerprint before a privileged action.
 The actions are start, stop, and packet capture.
 hotmon does not read or store the password.
+
+### 4. FakeMii mode
+
+hotmon fakes the Nintendo 3DS connection test on a running hotspot.
+Press `f` in the status view to turn it on or off.
+A 3DS can then use the hotspot without real internet.
+A popup shows the proxy address and the steps on the 3DS.
+Reference: https://github.com/Lectem/FakeMii

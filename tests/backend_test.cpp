@@ -247,6 +247,44 @@ TEST(Backend, FirewallLimitsHotspotForwardAndInput) {
   EXPECT_EQ(isolated_text.find("policy drop"), std::string::npos);
 }
 
+TEST(Backend, FirewallAcceptsFakeMiiOnTheGateway) {
+  const std::string rule = "iifname \"wlan0\" ip daddr 192.168.42.1 tcp dport 3000 socket wildcard 0 accept";
+  const std::string drop = "iifname \"wlan0\" ct state new drop";
+  const auto text = nft_text(sample_profile());
+  ASSERT_NE(text.find(rule), std::string::npos);
+  ASSERT_NE(text.find(drop), std::string::npos);
+  EXPECT_LT(text.find(rule), text.find(drop));
+  EXPECT_NE(text.find("ip daddr 192.168.42.1 udp dport 53 accept"), std::string::npos);
+  EXPECT_EQ(text.find("policy drop"), std::string::npos);
+  auto isolated = sample_profile();
+  isolated.upstream_interface = "none";
+  const auto isolated_text = nft_text(isolated);
+  ASSERT_NE(isolated_text.find(rule), std::string::npos);
+  EXPECT_LT(isolated_text.find(rule), isolated_text.find(drop));
+  auto other = sample_profile();
+  other.address_cidr = "10.5.0.0/24";
+  EXPECT_NE(
+      nft_text(other).find("iifname \"wlan0\" ip daddr 10.5.0.1 tcp dport 3000 socket wildcard 0 accept"),
+      std::string::npos);
+  auto unknown = sample_profile();
+  unknown.address_cidr = "";
+  ASSERT_FALSE(unknown.network());
+  const auto unknown_text = nft_text(unknown);
+  EXPECT_EQ(unknown_text.find("dport 3000"), std::string::npos);
+  EXPECT_NE(unknown_text.find(drop), std::string::npos);
+}
+
+// Security: the port 3000 rule is always in the table, also when FakeMii is off.
+// The rule must not open other local services on port 3000 to hotspot clients.
+// Such services usually listen on the wildcard address 0.0.0.0.
+// FakeMii listens on the gateway address only. "socket wildcard 0" accepts only that case.
+TEST(Backend, FirewallDoesNotOpenWildcardServicesOnTheFakeMiiPort) {
+  const auto text = nft_text(sample_profile());
+  EXPECT_NE(text.find("iifname \"wlan0\" ip daddr 192.168.42.1 tcp dport 3000 socket wildcard 0 accept"),
+            std::string::npos);
+  EXPECT_EQ(text.find("tcp dport 3000 accept"), std::string::npos);
+}
+
 TEST(Backend, ForwardingChangesOnlyTheHotspotAndUpstream) {
   const auto dir = scratch_dir();
   const auto paths = run_paths(dir);
