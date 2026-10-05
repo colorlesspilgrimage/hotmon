@@ -785,12 +785,21 @@ Result<FileDescriptor> HelperPrivilege::open_capture_socket(std::string_view int
 }
 
 std::vector<std::string> default_helper_argv() {
+  // Do not search PATH for pkexec.
+  // A program with that name in a user directory can show a false prompt and keep the password.
+  std::string pkexec = "/usr/bin/pkexec";
+  for (const char* candidate : {"/usr/bin/pkexec", "/bin/pkexec", "/run/wrappers/bin/pkexec"}) {
+    if (::access(candidate, X_OK) == 0) {
+      pkexec = candidate;
+      break;
+    }
+  }
   std::error_code error;
   const auto path = std::filesystem::read_symlink("/proc/self/exe", error);
   if (error) {
-    return {"pkexec", "/proc/self/exe", "--privileged-helper"};
+    return {pkexec, "/proc/self/exe", "--privileged-helper"};
   }
-  return {"pkexec", path.string(), "--privileged-helper"};
+  return {pkexec, path.string(), "--privileged-helper"};
 }
 
 std::unique_ptr<Privileged> make_privileged(uid_t euid, Runner& runner, ProcessControl& signals,

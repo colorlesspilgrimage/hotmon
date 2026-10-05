@@ -505,4 +505,26 @@ TEST(Privilege, MakePrivilegedChoosesByEuid) {
   EXPECT_EQ(dynamic_cast<DirectPrivilege*>(user.get()), nullptr);
 }
 
+// Security: a program named pkexec in a user PATH directory must not get the admin password.
+TEST(Privilege, DefaultHelperArgvDoesNotSearchPath) {
+  const auto dir = scratch_dir();
+  const auto fake = dir / "pkexec";
+  {
+    std::ofstream out(fake);
+    out << "#!/bin/sh\nexit 0\n";
+  }
+  std::filesystem::permissions(fake, std::filesystem::perms::owner_all);
+  const char* old_path = std::getenv("PATH");
+  const std::string saved = old_path != nullptr ? old_path : "";
+  ::setenv("PATH", dir.c_str(), 1);
+  const auto argv = default_helper_argv();
+  ::setenv("PATH", saved.c_str(), 1);
+  ASSERT_EQ(argv.size(), 3u);
+  ASSERT_FALSE(argv[0].empty());
+  EXPECT_EQ(argv[0].front(), '/');
+  EXPECT_FALSE(argv[0].starts_with(dir.string()));
+  EXPECT_EQ(argv[2], "--privileged-helper");
+  std::filesystem::remove_all(dir);
+}
+
 }
