@@ -83,6 +83,7 @@ hotmon asks before it starts the hotspot.
 hotmon asks before it stops the hotspot.
 hotmon asks before it starts a capture.
 If you cancel, hotmon does not apply the action.
+At the text prompt, you can push Ctrl+C to cancel. hotmon continues to run.
 The notice says that authorization was cancelled.
 If the check fails, the notice says that authorization failed.
 hotmon never reads, stores, or sees the password.
