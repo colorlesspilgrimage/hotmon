@@ -65,7 +65,7 @@ class FakeSource : public FrameSource {
 int loopback_connect(uint16_t port);
 // Poll the server every 10 ms until the client fd has data or EOF, or 2 s pass.
 bool poll_until_readable(FakeMii& server, int fd);
-// Read until EOF or an error. Poll the server between reads.
+// Poll the server between reads.
 std::string read_until_eof(FakeMii& server, int fd);
 // Send one request through a new loopback client and return the full reply.
 std::string fakemii_exchange(FakeMii& server, std::string_view request);

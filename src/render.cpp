@@ -575,7 +575,7 @@ std::vector<StyledRow> status_lines(const App& app, int width, const BoxChars& b
       popup = fakemii_popup(app, width, box);
     }
     if (static_cast<int>(lines.size() + popup.size()) > body_rows || !stretch) {
-      // The popup does not fit. Show a hint near the top of the status box, so a cut keeps it.
+      // Show the hint near the top of the status box, so a cut keeps it.
       popup.clear();
       body.insert(body.begin() + 1,
                   StyledRow{"FakeMii is on: " + fakemii_proxy(app) +

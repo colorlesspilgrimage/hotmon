@@ -13,22 +13,22 @@
 namespace hotmon {
 
 inline constexpr uint16_t FAKEMII_PORT = 3000;
-inline constexpr size_t FAKEMII_MAX_REQUEST = 8192;      // bytes
+inline constexpr size_t FAKEMII_MAX_REQUEST = 8192;
 inline constexpr size_t FAKEMII_MAX_CONNECTIONS = 8;
 inline constexpr std::chrono::seconds FAKEMII_TIMEOUT{5};  // per connection, from accept
 inline constexpr size_t FAKEMII_TARGET_MAX = 80;         // stored bytes of host/path
 
 struct FakeMiiReply {
   std::string bytes;      // full HTTP response, ready to send
-  bool conntest = false;  // true only for the conntest page
+  bool conntest = false;
   std::string target;     // "host/path" for display, raw (not sanitized)
 };
 
-// The conntest page. The binary contains it. The program reads no file for it.
+// The binary contains this page. The program reads no file for it.
 std::string_view fakemii_page();
 // True when the request has the blank line that ends the headers.
 bool fakemii_request_complete(std::string_view bytes);
-// Make the reply for a request. It accepts any bytes and makes no network call.
+// It accepts any bytes and makes no network call.
 FakeMiiReply fakemii_respond(std::string_view request);
 
 // A small HTTP server that fakes the Nintendo 3DS connection test.
