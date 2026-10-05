@@ -31,7 +31,6 @@ BoxChars box_chars() {
   return {"+", "+", "+", "+", "-", "|"};
 }
 
-// Return the byte length of the UTF-8 sequence at index. Set columns to its screen width.
 size_t next_char(const std::string& text, size_t index, int& columns) {
   const auto byte = static_cast<unsigned char>(text[index]);
   size_t length = 1;
@@ -58,7 +57,6 @@ size_t next_char(const std::string& text, size_t index, int& columns) {
 }
 
 // Cut the text at a character boundary so that it uses at most width columns.
-// Set used to the columns of the result.
 size_t cut_columns(const std::string& text, size_t start, int width, int& used) {
   size_t index = start;
   used = 0;
