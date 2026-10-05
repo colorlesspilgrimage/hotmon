@@ -52,12 +52,34 @@ to run tests:
 | key | |
 | --- | --- |
 | `m` | traffic |
+| `f` | toggle FakeMii (status view, hotspot running) |
 | `s`, `Esc` | back to status |
 | `w` | wizard again |
 | `c` | start a capture (asks first) |
 | `z` | stop the capture |
 | `k` | stop the hotspot |
 | `q` | quit |
+
+## FakeMii
+
+fake Nintendo 3DS connection test server for the hotspot, so a 3DS can use a network with no internet.
+
+- listens on `<hotspot gateway ip>:3000` only.
+- answers only `http://conntest.nintendowifi.net/`. everything else gets 404.
+- never forwards traffic. it is not a real proxy.
+- press `f` in the status view while the hotspot runs. press `f` again to stop it.
+- stops when the hotspot stops, when the wizard applies again, and when hotmon quits.
+- not saved in the profile.
+- the popup needs a tall terminal. on a short terminal you get a one-line hint.
+
+on the 3DS: Internet Settings > Connection Settings > pick the connection > Change Settings > Proxy Settings: Yes > Detailed Setup > proxy server is the gateway IP, port 3000 > save > Test Connection.
+
+it mainly helps when the upstream is `none`. with an upstream connection the console reaches the real test server anyway.
+
+firewall: with the direct hostapd backend, hotmon opens TCP port 3000 to the gateway in its own nftables table. apply the wizard once after an update to get this rule. with NetworkManager or iwd, hotmon does not manage the firewall. a host firewall (such as ufw) may block port 3000.
+
+idea from FakeMii (https://github.com/Lectem/FakeMii).
+
 
 
 ## backend selection
