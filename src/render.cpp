@@ -575,9 +575,11 @@ std::vector<StyledRow> status_lines(const App& app, int width, const BoxChars& b
       popup = fakemii_popup(app, width, box);
     }
     if (static_cast<int>(lines.size() + popup.size()) > body_rows || !stretch) {
-      // The popup does not fit. Show a hint near the top of the status box, so a cut keeps it.
+      // The popup does not fit. Show a hint as the first row of the status box.
+      // A cut keeps the top rows. A small terminal can show only one row.
+      // FakeMii runs only while the hotspot runs, so the hint also tells the state.
       popup.clear();
-      body.insert(body.begin() + 1,
+      body.insert(body.begin(),
                   StyledRow{"FakeMii is on: " + fakemii_proxy(app) +
                                 ". Make the terminal taller to see the steps.",
                             Style::Good});
