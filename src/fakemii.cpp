@@ -301,8 +301,14 @@ void FakeMii::read_client(Client& client) {
       break;
     }
   }
-  if (!fakemii_request_complete(client.request) && client.request.size() <= FAKEMII_MAX_REQUEST) {
+  const size_t header_end = client.request.find("\r\n\r\n");
+  if (header_end == std::string::npos && client.request.size() <= FAKEMII_MAX_REQUEST) {
     return;
+  }
+  // One request per connection. Drop the bytes after the blank line.
+  // Then the size check sees only the request, and not extra bytes from the same read.
+  if (header_end != std::string::npos) {
+    client.request.resize(header_end + 4);
   }
   FakeMiiReply reply = fakemii_respond(client.request);
   client.reply = std::move(reply.bytes);

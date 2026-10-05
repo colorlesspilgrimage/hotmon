@@ -631,6 +631,27 @@ TEST(Render, FakeMiiPopupAppearsWhenTheTerminalIsTallEnough) {
   EXPECT_TRUE(saw_hint);
 }
 
+// A narrow and short terminal shows only the first row of the Status box.
+// The FakeMii hint must be that row, so the user can see that FakeMii is on.
+// Below 34 columns at 12 rows, the Keys box is tall and the Status box has no row.
+TEST(Render, FakeMiiHintStaysOnNarrowShortTerminals) {
+  for (const char* locale : {"C", "C.UTF-8"}) {
+    if (setlocale(LC_ALL, locale) == nullptr) {
+      continue;
+    }
+    auto app = fakemii_status("/tmp/hotmon-fakemii-narrow.json");
+    for (int width = 34; width <= 80; ++width) {
+      for (int height = 12; height <= 14; ++height) {
+        const auto lines = render(app, width, height);
+        ASSERT_EQ(static_cast<int>(lines.size()), height);
+        EXPECT_TRUE(has_row_with(lines, "FakeMii is on:") || has_row_with(lines, "FakeMii (3DS)"))
+            << locale << " " << width << "x" << height;
+      }
+    }
+  }
+  setlocale(LC_ALL, "C");
+}
+
 TEST(Render, FakeMiiNoteForUnmanagedFirewall) {
   setlocale(LC_ALL, "C");
   auto app = fakemii_status("/tmp/hotmon-fakemii-firewall.json");

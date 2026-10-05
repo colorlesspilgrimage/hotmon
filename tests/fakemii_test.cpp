@@ -252,6 +252,31 @@ TEST(FakeMii, OversizedRequestIsRejected) {
   EXPECT_TRUE(server.conntest_served());
 }
 
+// The request ends below the size cap. Extra bytes follow in the same read.
+// The server must ignore the extra bytes and serve the page.
+TEST(FakeMii, ExtraBytesAfterTheRequestAreIgnored) {
+  FakeMii server;
+  ASSERT_TRUE(server.start("127.0.0.1", 0));
+  std::string request = "GET http://conntest.nintendowifi.net/ HTTP/1.1\r\nX-Pad: ";
+  request += std::string(8100 - request.size(), 'a') + "\r\n\r\n";
+  ASSERT_LE(request.size(), FAKEMII_MAX_REQUEST);
+  const int fd = loopback_connect(server.port());
+  ASSERT_GE(fd, 0);
+  const size_t head = 8000;
+  ASSERT_EQ(::send(fd, request.data(), head, MSG_NOSIGNAL), static_cast<ssize_t>(head));
+  for (int round = 0; round < 5; ++round) {
+    server.poll();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(server.served(), 0u);
+  const std::string rest = request.substr(head) + std::string(9000, 'b');
+  ASSERT_EQ(::send(fd, rest.data(), rest.size(), MSG_NOSIGNAL), static_cast<ssize_t>(rest.size()));
+  const std::string reply = read_until_eof(server, fd);
+  ::close(fd);
+  EXPECT_EQ(reply, fakemii_respond(request).bytes);
+  EXPECT_TRUE(server.conntest_served());
+}
+
 TEST(FakeMii, SlowClientTimesOut) {
   FakeMii server;
   ASSERT_TRUE(server.start("127.0.0.1", 0));
