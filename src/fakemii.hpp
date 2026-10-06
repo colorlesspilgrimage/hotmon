@@ -17,6 +17,7 @@ inline constexpr size_t FAKEMII_MAX_REQUEST = 8192;
 inline constexpr size_t FAKEMII_MAX_CONNECTIONS = 8;
 inline constexpr std::chrono::seconds FAKEMII_TIMEOUT{5};  // per connection, from accept
 inline constexpr size_t FAKEMII_TARGET_MAX = 80;         // stored bytes of host/path
+inline constexpr std::string_view FAKEMII_CONNTEST_HOST = "conntest.nintendowifi.net";
 
 // Join an IPv4 address and a port. Example: 192.168.42.1:3000.
 inline std::string endpoint_text(std::string_view ip, uint16_t port) {

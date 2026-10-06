@@ -527,8 +527,9 @@ std::vector<StyledRow> fakemii_popup(const App& app, int width, const BoxChars& 
                            Style::Dim});
   if (app.backend != BackendKind::DirectHostapd) {
     // The firewall note names the fixed port. The firewall rule uses the same constant.
-    rows.push_back(StyledRow{"hotmon does not manage the firewall for this backend. A host firewall (such "
-                             "as ufw) may block port " + std::to_string(FAKEMII_PORT) + ".",
+    rows.push_back(StyledRow{"hotmon opens port " + std::to_string(FAKEMII_PORT) +
+                                 " in ufw. It manages no other firewall for this backend. Another host "
+                                 "firewall may block the port.",
                              Style::Dim});
   }
   std::vector<StyledRow> lines;

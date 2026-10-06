@@ -59,7 +59,7 @@ std::filesystem::path scratch_dir() {
 }
 
 Paths test_paths(const std::filesystem::path& dir) {
-  return Paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  return Paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
 }
 
 ScriptedRunner ScriptedRunner::with_results(std::vector<Result<std::string>> values) {

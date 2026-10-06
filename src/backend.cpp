@@ -40,6 +40,10 @@ ApplyPlan nm_plan(const Profile& profile, const Paths& paths) {
   // The keyfile stays while the hotspot runs. `nmcli connection delete` removes it at stop.
   // A delete before the load would remove the new file, because the old profile used this path.
   plan.files.push_back(plain_file(keyfile, nm_keyfile(profile), 0600));
+  // Written every time, so a reapply with an upstream drops the FakeMii name. Removed at stop.
+  PlanFile dns = plain_file(paths.nm_dnsmasq_conf(), fakemii_dns_text(profile), 0644);
+  dns.remove_on_failure = true;
+  plan.files.push_back(std::move(dns));
   plan.commands.push_back(PlannedCommand::make("nmcli", {"connection", "load", keyfile.string()})
                               .failing_on_stderr("Could not load file"));
   plan.commands.push_back(PlannedCommand::make("nmcli", {"connection", "up", "hotmon"}));
@@ -91,6 +95,20 @@ ApplyPlan hostapd_plan(const Profile& profile, const Paths& paths, bool existing
   plan.tools = existing ? std::vector<std::string>{"hostapd", "dnsmasq", "nftables"}
                         : std::vector<std::string>{DIRECT_TOOLS[0], DIRECT_TOOLS[1], DIRECT_TOOLS[2]};
   return plan;
+}
+
+ApplyPlan backend_plan(BackendKind kind, const Profile& profile, const Paths& paths) {
+  switch (kind) {
+    case BackendKind::NetworkManager:
+      return nm_plan(profile, paths);
+    case BackendKind::Iwd:
+      return iwd_plan(profile, paths);
+    case BackendKind::ExistingHostapd:
+      return hostapd_plan(profile, paths, true);
+    case BackendKind::DirectHostapd:
+      return hostapd_plan(profile, paths, false);
+  }
+  return hostapd_plan(profile, paths, false);
 }
 
 }
@@ -160,7 +178,7 @@ ProbeFacts probe_system() {
 
 Paths Paths::system() {
   return Paths{"/run/hotmon", "/etc/hostapd/hostapd.conf", "/var/lib/iwd/ap", "/proc",
-               "/run/NetworkManager/system-connections"};
+               "/run/NetworkManager/system-connections", "/etc/NetworkManager/dnsmasq-shared.d"};
 }
 
 std::filesystem::path Paths::hostapd_pid() const { return state_dir / "hostapd.pid"; }
@@ -179,10 +197,12 @@ std::filesystem::path Paths::dnsmasq_conf() const { return dnsmasq_dir() / "dnsm
 std::filesystem::path Paths::dnsmasq_lease() const { return dnsmasq_dir() / "leases"; }
 std::filesystem::path Paths::nft_path() const { return state_dir / "hotmon.nft"; }
 std::filesystem::path Paths::nm_secret() const { return nm_connection_dir / "hotmon.nmconnection"; }
+std::filesystem::path Paths::nm_dnsmasq_conf() const { return nm_dnsmasq_dir / "hotmon.conf"; }
 std::filesystem::path Paths::hostapd_backup() const { return state_dir / "hostapd.conf.bak"; }
 std::filesystem::path Paths::created_marker() const { return state_dir / "hostapd.created"; }
 std::filesystem::path Paths::forwarding_record() const { return state_dir / "forwarding.restore"; }
 std::filesystem::path Paths::nft_live_marker() const { return state_dir / "nft.live"; }
+std::filesystem::path Paths::ufw_record() const { return state_dir / "ufw.holes"; }
 
 void clear_nft_live(const Paths& paths) {
   std::error_code error;
@@ -209,17 +229,14 @@ Result<ApplyPlan> plan_apply(BackendKind kind, const Profile& profile, const Pat
   if (auto checked = profile.check_settings(); !checked) {
     return unexpected_text("The backend rejected the setting. " + checked.error());
   }
-  switch (kind) {
-    case BackendKind::NetworkManager:
-      return nm_plan(profile, paths);
-    case BackendKind::Iwd:
-      return iwd_plan(profile, paths);
-    case BackendKind::ExistingHostapd:
-      return hostapd_plan(profile, paths, true);
-    case BackendKind::DirectHostapd:
-      return hostapd_plan(profile, paths, false);
+  ApplyPlan plan = backend_plan(kind, profile, paths);
+  // Keep this last. execute_plan does not remove the ufw rules when a later command fails.
+  if (auto network = profile.network()) {
+    if (auto gateway = network->gateway()) {
+      plan.commands.push_back(PlannedCommand::make("hotmon-ufw", {profile.ap_interface, *gateway}));
+    }
   }
-  return hostapd_plan(profile, paths, false);
+  return plan;
 }
 
 std::vector<PlannedCommand> plan_stop(BackendKind kind, const Profile& profile) {

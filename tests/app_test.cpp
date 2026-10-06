@@ -30,7 +30,7 @@ App loaded_app(const std::filesystem::path& dir) {
 }
 
 Paths local_paths(const std::filesystem::path& dir) {
-  return Paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  return Paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
 }
 
 Result<void> apply_direct(App& app, Runner& runner, ProcessControl& signals, const Paths& paths) {

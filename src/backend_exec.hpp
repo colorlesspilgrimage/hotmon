@@ -44,6 +44,9 @@ Result<void> teardown_hotspot(BackendKind backend, const Profile& profile, bool 
                               const std::vector<StartedProc>& started, Runner& runner,
                               ProcessControl& signals, const Paths& paths);
 Result<void> run_nft_delete(Runner& runner);
+// Inserts ufw_hole_rules() into ufw's input chain when ufw is active. args: interface, gateway.
+Result<void> open_ufw_holes(const Paths& paths, Runner& runner, const std::vector<std::string>& args);
+Result<void> close_ufw_holes(const Paths& paths, Runner& runner);
 Result<void> stop_started(ProcessControl& signals, const std::vector<StartedProc>& started);
 Result<void> restore_forwarding(const Paths& paths);
 Result<void> restore_hostapd_backup(const Paths& paths);

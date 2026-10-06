@@ -29,7 +29,7 @@ void assert_no_secret_args(const ApplyPlan& plan, const std::string& secret) {
 }
 
 Paths run_paths(const std::filesystem::path& dir) {
-  return Paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  return Paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
 }
 
 TEST(Backend, SelectionFollowsTheServiceOrder) {
@@ -97,6 +97,35 @@ TEST(Backend, DirectPlanUsesHostapdDnsmasqAndNftables) {
   std::filesystem::remove_all(dir);
 }
 
+// Without an upstream, the hotspot DNS must answer the 3DS test name with the gateway.
+// With an upstream, the real answer must pass through, so FakeMii-less tests still work.
+TEST(Backend, ConntestNameResolvesToTheGatewayOnlyWithoutUpstream) {
+  const std::string mapping = "address=/conntest.nintendowifi.net/192.168.42.1\n";
+  auto offline = sample_profile();
+  offline.upstream_interface = "none";
+  EXPECT_NE(dnsmasq_conf_text(offline).find(mapping), std::string::npos);
+  EXPECT_EQ(dnsmasq_conf_text(sample_profile()).find("conntest"), std::string::npos);
+  const auto dir = scratch_dir();
+  const auto paths = run_paths(dir);
+  auto plan = plan_apply(BackendKind::NetworkManager, offline, paths);
+  ASSERT_TRUE(plan);
+  ScriptedRunner runner;
+  RecordedSignals signals;
+  ASSERT_TRUE(execute_plan(*plan, runner, signals, paths));
+  std::ifstream written(paths.nm_dnsmasq_conf());
+  std::string text((std::istreambuf_iterator<char>(written)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(text, mapping);
+  // A reapply with an upstream must drop the mapping for NetworkManager's dnsmasq.
+  auto online = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
+  ASSERT_TRUE(online);
+  ASSERT_TRUE(execute_plan(*online, runner, signals, paths));
+  EXPECT_EQ(std::filesystem::file_size(paths.nm_dnsmasq_conf()), 0u);
+  ASSERT_TRUE(teardown_hotspot(BackendKind::NetworkManager, sample_profile(), false, {}, runner, signals,
+                               paths));
+  EXPECT_FALSE(std::filesystem::exists(paths.nm_dnsmasq_conf()));
+  std::filesystem::remove_all(dir);
+}
+
 TEST(Backend, OpenHostapdConfigHasNoPassphrase) {
   auto profile = sample_profile();
   profile.security = SecurityMode::Open;
@@ -110,11 +139,12 @@ TEST(Backend, OpenHostapdConfigHasNoPassphrase) {
 
 TEST(Backend, NetworkManagerPlanUsesNmcliOnly) {
   const auto dir = scratch_dir();
-  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
   ASSERT_TRUE(plan);
-  EXPECT_TRUE(std::all_of(plan->commands.begin(), plan->commands.end(),
-                          [](const auto& command) { return command.program == "nmcli"; }));
+  EXPECT_TRUE(std::all_of(plan->commands.begin(), plan->commands.end(), [](const auto& command) {
+    return command.program == "nmcli" || command.program == "hotmon-ufw";
+  }));
   EXPECT_NE(plan->files[0].contents.find("ssid=Hotmon"), std::string::npos);
   EXPECT_NE(plan->files[0].contents.find("key-mgmt=wpa-psk"), std::string::npos);
   EXPECT_NE(plan->files[0].contents.find("psk=correct-horse"), std::string::npos);
@@ -131,8 +161,9 @@ TEST(Backend, IwdPlanWritesTheAccessPointProfile) {
   const auto paths = run_paths(dir);
   auto plan = plan_apply(BackendKind::Iwd, sample_profile(), paths);
   ASSERT_TRUE(plan);
-  EXPECT_TRUE(std::all_of(plan->commands.begin(), plan->commands.end(),
-                          [](const auto& command) { return command.program == "iwctl"; }));
+  EXPECT_TRUE(std::all_of(plan->commands.begin(), plan->commands.end(), [](const auto& command) {
+    return command.program == "iwctl" || command.program == "hotmon-ufw";
+  }));
   EXPECT_NE(plan->files[0].contents.find("Channel=6"), std::string::npos);
   EXPECT_NE(plan->files[0].contents.find("Passphrase=correct-horse"), std::string::npos);
   EXPECT_NE(plan->files[0].contents.find("IPRange=192.168.42.10,192.168.42.100"), std::string::npos);
@@ -141,7 +172,7 @@ TEST(Backend, IwdPlanWritesTheAccessPointProfile) {
 
 TEST(Backend, RejectionIsAClearError) {
   const auto dir = scratch_dir();
-  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir, dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   auto profile = sample_profile();
   profile.channel = 2;
   profile.band = Band::Band5;
@@ -163,7 +194,7 @@ TEST(Backend, RejectionIsAClearError) {
 
 TEST(Backend, ExistingHostapdUsesSystemctl) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);
   ASSERT_TRUE(plan);
   EXPECT_TRUE(std::any_of(plan->commands.begin(), plan->commands.end(), [](const auto& command) {
@@ -313,9 +344,101 @@ TEST(Backend, ForwardingChangesOnlyTheHotspotAndUpstream) {
   std::filesystem::remove_all(dir);
 }
 
+std::vector<PlannedCommand> iptables_calls(const ScriptedRunner& runner, const std::string& action) {
+  std::vector<PlannedCommand> calls;
+  for (const auto& command : runner.calls) {
+    if (command.program == "iptables" &&
+        std::find(command.args.begin(), command.args.end(), action) != command.args.end()) {
+      calls.push_back(command);
+    }
+  }
+  return calls;
+}
+
+TEST(Backend, UfwHolesOpenWithEveryBackendAndCloseAtStop) {
+  for (auto kind : {BackendKind::NetworkManager, BackendKind::Iwd, BackendKind::DirectHostapd}) {
+    const auto dir = scratch_dir();
+    const auto paths = test_paths(dir);
+    auto plan = plan_apply(kind, sample_profile(), paths);
+    ASSERT_TRUE(plan);
+    ScriptedRunner runner;
+    RecordedSignals signals;
+    ASSERT_TRUE(execute_plan(*plan, runner, signals, paths)) << label(kind);
+    const auto inserted = iptables_calls(runner, "-I");
+    ASSERT_EQ(inserted.size(), ufw_hole_rules("wlan0", "192.168.42.1").size()) << label(kind);
+    const std::vector<std::string> dhcp = {"-w", "-I", "ufw-user-input", "-i", "wlan0", "-p", "udp",
+                                           "--dport", "67", "-j", "ACCEPT"};
+    EXPECT_TRUE(std::any_of(inserted.begin(), inserted.end(),
+                            [&](const auto& command) { return command.args == dhcp; }));
+    EXPECT_TRUE(std::filesystem::exists(paths.ufw_record()));
+    ASSERT_TRUE(teardown_hotspot(kind, sample_profile(), false, {}, runner, signals, paths));
+    const auto deleted = iptables_calls(runner, "-D");
+    ASSERT_EQ(deleted.size(), inserted.size());
+    for (size_t index = 0; index < deleted.size(); ++index) {
+      auto args = deleted[index].args;
+      args[1] = "-I";
+      EXPECT_TRUE(std::any_of(inserted.begin(), inserted.end(),
+                              [&](const auto& command) { return command.args == args; }));
+    }
+    EXPECT_FALSE(std::filesystem::exists(paths.ufw_record()));
+    std::filesystem::remove_all(dir);
+    std::filesystem::remove_all(paths.dnsmasq_dir());
+  }
+}
+
+TEST(Backend, UfwHolesAreSkippedWhenUfwIsOff) {
+  const auto dir = scratch_dir();
+  const auto paths = test_paths(dir);
+  auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
+  ASSERT_TRUE(plan);
+  auto runner = ScriptedRunner::with_results(
+      {std::string(), std::string(), unexpected_text("iptables: No chain/target/match by that name.")});
+  RecordedSignals signals;
+  ASSERT_TRUE(execute_plan(*plan, runner, signals, paths));
+  EXPECT_TRUE(iptables_calls(runner, "-I").empty());
+  EXPECT_FALSE(std::filesystem::exists(paths.ufw_record()));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(Backend, FailedUfwInsertRemovesTheRulesAlreadyInserted) {
+  const auto dir = scratch_dir();
+  const auto paths = test_paths(dir);
+  auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
+  ASSERT_TRUE(plan);
+  auto runner = ScriptedRunner::with_results({std::string(), std::string(), std::string(), std::string(),
+                                              unexpected_text("iptables: Resource temporarily unavailable.")});
+  RecordedSignals signals;
+  auto failed = execute_plan(*plan, runner, signals, paths);
+  ASSERT_FALSE(failed);
+  EXPECT_NE(failed.error().find("ufw failed"), std::string::npos);
+  EXPECT_EQ(iptables_calls(runner, "-D").size(), ufw_hole_rules("wlan0", "192.168.42.1").size());
+  EXPECT_FALSE(std::filesystem::exists(paths.ufw_record()));
+  std::filesystem::remove_all(dir);
+}
+
+// `ufw reload` drops hotmon's rules. Stop must still finish and forget them.
+TEST(Backend, StopToleratesUfwRulesThatAreAlreadyGone) {
+  const auto dir = scratch_dir();
+  const auto paths = test_paths(dir);
+  std::filesystem::create_directories(paths.state_dir);
+  std::ofstream(paths.ufw_record()) << "wlan0 192.168.42.1\n";
+  auto runner = ScriptedRunner::with_results(
+      {unexpected_text("iptables: Bad rule (does a matching rule exist in that chain?)."),
+       unexpected_text("iptables: No chain/target/match by that name.")});
+  EXPECT_TRUE(close_ufw_holes(paths, runner));
+  EXPECT_FALSE(std::filesystem::exists(paths.ufw_record()));
+  auto locked = ScriptedRunner::with_results({unexpected_text("Another app is holding the xtables lock.")});
+  std::ofstream(paths.ufw_record()) << "wlan0 192.168.42.1\n";
+  auto error = close_ufw_holes(paths, locked);
+  ASSERT_FALSE(error);
+  EXPECT_NE(error.error().find("The ufw rules did not stop."), std::string::npos);
+  EXPECT_TRUE(std::filesystem::exists(paths.ufw_record()));
+  std::filesystem::remove_all(dir);
+}
+
 TEST(Backend, FailedStartRemovesTheFirewallAndTheDaemon) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   std::filesystem::create_directories(dir);
   std::ofstream(paths.hostapd_config) << "leave-this\n";
   auto plan = plan_apply(BackendKind::DirectHostapd, sample_profile(), paths);
@@ -364,7 +487,7 @@ TEST(Backend, StopDoesNotSignalAForeignProcess) {
 
 TEST(Backend, HostapdSystemFileIsRestoredFromTheBackup) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);
@@ -387,7 +510,7 @@ TEST(Backend, HostapdSystemFileIsRestoredFromTheBackup) {
 
 TEST(Backend, MissingBackupDoesNotChangeTheSystemFile) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   std::filesystem::create_directories(paths.state_dir);
@@ -419,7 +542,7 @@ TEST(Backend, DaemonNameAcceptsOnlyHostapdAndDnsmasq) {
 TEST(Backend, NmKeyfileStaysWhereNetworkManagerLoadsIt) {
   EXPECT_EQ(Paths::system().nm_secret().parent_path(), "/run/NetworkManager/system-connections");
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
   ASSERT_TRUE(plan);
   ModeCheck runner;
@@ -432,7 +555,7 @@ TEST(Backend, NmKeyfileStaysWhereNetworkManagerLoadsIt) {
 
 TEST(Backend, NmRestartDoesNotDeleteTheNewKeyfile) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "h.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   auto plan = plan_apply(BackendKind::NetworkManager, sample_profile(), paths);
   ASSERT_TRUE(plan);
   // NetworkManager removes the backing file on delete. The old profile uses the same path.
@@ -456,7 +579,7 @@ TEST(Backend, StderrMarkerFailsACommandThatExitsZero) {
 
 TEST(Backend, FailedFileInstallRemovesTheSecret) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "kept.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   std::filesystem::create_directories(paths.state_dir);
   std::filesystem::create_directories(paths.nft_path());
   auto plan = plan_apply(BackendKind::DirectHostapd, sample_profile(), paths);
@@ -478,7 +601,7 @@ TEST(Backend, FailedFileInstallRemovesTheSecret) {
 
 TEST(Backend, FailedFileInstallRestoresTheSystemFile) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   std::filesystem::create_directories(paths.state_dir);
@@ -500,7 +623,7 @@ TEST(Backend, FailedFileInstallRestoresTheSystemFile) {
 
 TEST(Backend, MissingSystemFileUsesThePrivateFile) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);
   ASSERT_TRUE(plan);
@@ -670,7 +793,7 @@ TEST(Backend, FailedReapplyBeforeNftKeepsTheLiveRulesFile) {
 
 TEST(Backend, SecondApplyKeepsTheOriginalHostapdBackup) {
   const auto dir = scratch_dir();
-  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  Paths paths{dir / "run", dir / "etc" / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   std::filesystem::create_directories(paths.hostapd_config.parent_path());
   std::ofstream(paths.hostapd_config) << "original-config\n";
   auto plan = plan_apply(BackendKind::ExistingHostapd, sample_profile(), paths);

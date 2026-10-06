@@ -652,13 +652,13 @@ TEST(Render, FakeMiiNoteForUnmanagedFirewall) {
   auto app = fakemii_status("/tmp/hotmon-fakemii-firewall.json");
   for (BackendKind backend : {BackendKind::NetworkManager, BackendKind::Iwd}) {
     app.backend = backend;
-    EXPECT_NE(box_text(render(app, 100, 40)).find("A host firewall (such as ufw) may block port 3000."),
+    EXPECT_NE(box_text(render(app, 100, 40)).find("Another host firewall may block the port."),
               std::string::npos);
   }
   app.backend = BackendKind::DirectHostapd;
   const std::string text = joined(render(app, 100, 40));
   EXPECT_NE(text.find("FakeMii (3DS)"), std::string::npos);
-  EXPECT_EQ(text.find("may block port"), std::string::npos);
+  EXPECT_EQ(text.find("may block the port"), std::string::npos);
 }
 
 TEST(Render, FooterShowsTheFakeMiiKey) {

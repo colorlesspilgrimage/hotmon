@@ -31,8 +31,6 @@ This is test.html page
 </html>
 )page";
 
-constexpr std::string_view CONNTEST_HOST = "conntest.nintendowifi.net";
-
 std::string http_reply(std::string_view status, std::string_view type, std::string_view extra,
                        std::string_view body) {
   return std::format(
@@ -153,8 +151,8 @@ FakeMiiReply fakemii_respond(std::string_view request) {
   const std::string_view host = rest.substr(0, slash);
   const std::string_view path = slash == std::string_view::npos ? std::string_view() : rest.substr(slash);
   std::string target = std::string(host) + std::string(path);
-  const bool host_ok = equal_ignore_case(host, CONNTEST_HOST) ||
-                       equal_ignore_case(host, std::string(CONNTEST_HOST) + ":80");
+  const bool host_ok = equal_ignore_case(host, FAKEMII_CONNTEST_HOST) ||
+                       equal_ignore_case(host, std::string(FAKEMII_CONNTEST_HOST) + ":80");
   if (request.size() > FAKEMII_MAX_REQUEST || line.method != "GET" ||
       !line.version.starts_with("HTTP/1.") || !host_ok || path != "/") {
     return not_found(std::move(target));

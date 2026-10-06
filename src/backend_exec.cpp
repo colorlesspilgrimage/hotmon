@@ -1,5 +1,6 @@
 #include "backend_exec.hpp"
 
+#include "backend_text.hpp"
 #include "iface.hpp"
 #include "process.hpp"
 #include "text.hpp"
@@ -659,6 +660,76 @@ Result<void> run_nft_delete(Runner& runner) {
   return {};
 }
 
+namespace {
+
+PlannedCommand iptables_rule(const char* action, const std::vector<std::string>& rule) {
+  std::vector<std::string> args = {"-w", action, UFW_INPUT_CHAIN};
+  args.insert(args.end(), rule.begin(), rule.end());
+  return PlannedCommand::make("iptables", std::move(args));
+}
+
+// After `ufw reload` or `ufw disable`, the rule or the whole chain is gone.
+bool ufw_rule_missing(std::string_view message) {
+  const std::string text = ascii_lower(std::string(message));
+  return text.find("bad rule") != std::string::npos || text.find("no chain") != std::string::npos ||
+         stop_target_missing(message);
+}
+
+}
+
+Result<void> close_ufw_holes(const Paths& paths, Runner& runner) {
+  const auto record = paths.ufw_record();
+  if (!std::filesystem::exists(record)) {
+    return {};
+  }
+  std::ifstream input(record);
+  std::string ap;
+  std::string gateway;
+  if (!(input >> ap >> gateway) || !valid_name(ap) || !parse_ipv4(gateway)) {
+    return unexpected_text("The ufw record is not valid.");
+  }
+  for (const auto& rule : ufw_hole_rules(ap, gateway)) {
+    if (auto deleted = runner.run(iptables_rule("-D", rule));
+        !deleted && !ufw_rule_missing(deleted.error())) {
+      return unexpected_text("The ufw rules did not stop. " + deleted.error());
+    }
+  }
+  std::error_code error;
+  std::filesystem::remove(record, error);
+  if (error) {
+    return unexpected_text("The ufw record cannot be removed. " + error.message());
+  }
+  return {};
+}
+
+Result<void> open_ufw_holes(const Paths& paths, Runner& runner, const std::vector<std::string>& args) {
+  if (args.size() != 2 || !valid_name(args[0]) || !parse_ipv4(args[1])) {
+    return unexpected_text("The hotspot interface or gateway is not valid.");
+  }
+  // A new apply can change the interface or the gateway.
+  if (auto closed = close_ufw_holes(paths, runner); !closed) {
+    return closed;
+  }
+  // Without the chain, ufw is off or not installed. Nothing to open.
+  if (!runner.run(PlannedCommand::make("iptables", {"-w", "-n", "-L", UFW_INPUT_CHAIN}))) {
+    return {};
+  }
+  // Write the record first, so a failure below can remove the rules already inserted.
+  if (auto written = write_text(paths.ufw_record(), args[0] + " " + args[1] + "\n", 0600); !written) {
+    return written;
+  }
+  for (const auto& rule : ufw_hole_rules(args[0], args[1])) {
+    if (auto inserted = runner.run(iptables_rule("-I", rule)); !inserted) {
+      std::string message = inserted.error();
+      if (auto closed = close_ufw_holes(paths, runner); !closed) {
+        message += " " + closed.error();
+      }
+      return unexpected_text(std::move(message));
+    }
+  }
+  return {};
+}
+
 Result<void> stop_started(ProcessControl& signals, const std::vector<StartedProc>& started) {
   for (const StartedProc& item : started) {
     if (item.name != "hostapd" && item.name != "dnsmasq") {
@@ -702,6 +773,13 @@ Result<StartReport> execute_plan(const ApplyPlan& plan, Runner& runner, ProcessC
                           installed, runner, signals, paths, started, nft_installed, forwarding_set);
       }
       forwarding_set = *enabled;
+      continue;
+    }
+    if (command.program == "hotmon-ufw") {
+      if (auto opened = open_ufw_holes(paths, runner, command.args); !opened) {
+        return fail_start("The backend rejected the setting. ufw failed: " + opened.error(),
+                          installed, runner, signals, paths, started, nft_installed, forwarding_set);
+      }
       continue;
     }
     auto result = runner.run(command);
@@ -755,6 +833,9 @@ Result<void> teardown_hotspot(BackendKind backend, const Profile& profile, bool 
     return unexpected_text(deleted.error());
   }
   clear_nft_live(paths);
+  if (auto closed = close_ufw_holes(paths, runner); !closed) {
+    return unexpected_text(closed.error());
+  }
   if (auto restored = restore_forwarding(paths); !restored) {
     return unexpected_text(restored.error());
   }
@@ -769,6 +850,7 @@ Result<void> teardown_hotspot(BackendKind backend, const Profile& profile, bool 
     return unexpected_text(retired.error());
   }
   std::filesystem::remove(paths.nm_secret(), error);
+  std::filesystem::remove(paths.nm_dnsmasq_conf(), error);
   return {};
 }
 

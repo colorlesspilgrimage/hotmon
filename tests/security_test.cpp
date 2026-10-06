@@ -108,7 +108,7 @@ TEST(Security, ChildDoesNotInheritOpenDescriptors) {
 // S4: Other local users must not write the dnsmasq lease file.
 TEST(Security, DnsmasqLeaseFileIsNotWorldWritable) {
   const auto dir = scratch_dir();
-  const Paths paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm"};
+  const Paths paths{dir / "run", dir / "hostapd.conf", dir / "iwd", dir / "proc", dir / "nm", dir / "nm-dnsmasq"};
   auto plan = plan_apply(BackendKind::DirectHostapd, sample_profile(), paths);
   ASSERT_TRUE(plan);
   ScriptedRunner runner;

@@ -39,6 +39,8 @@ struct Paths {
   std::filesystem::path proc_root;
   // NetworkManager loads keyfiles only from its own folders.
   std::filesystem::path nm_connection_dir;
+  // NetworkManager's dnsmasq for shared connections reads extra settings only from here.
+  std::filesystem::path nm_dnsmasq_dir;
 
   static Paths system();
   std::filesystem::path hostapd_pid() const;
@@ -49,10 +51,12 @@ struct Paths {
   std::filesystem::path dnsmasq_lease() const;
   std::filesystem::path nft_path() const;
   std::filesystem::path nm_secret() const;
+  std::filesystem::path nm_dnsmasq_conf() const;
   std::filesystem::path hostapd_backup() const;
   std::filesystem::path created_marker() const;
   std::filesystem::path forwarding_record() const;
   std::filesystem::path nft_live_marker() const;
+  std::filesystem::path ufw_record() const;
 };
 
 void clear_nft_live(const Paths& paths);

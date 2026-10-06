@@ -46,6 +46,21 @@ std::string hostapd_conf_text(const Profile& profile) {
   return text;
 }
 
+std::string fakemii_dns_text(const Profile& profile) {
+  if (profile.upstream_interface != "none") {
+    return {};
+  }
+  auto network = profile.network();
+  if (!network) {
+    return {};
+  }
+  auto gateway = network->gateway();
+  if (!gateway) {
+    return {};
+  }
+  return std::format("address=/{}/{}\n", FAKEMII_CONNTEST_HOST, *gateway);
+}
+
 std::string dnsmasq_conf_text(const Profile& profile) {
   std::string listen = "0.0.0.0";
   std::string netmask = "255.255.255.0";
@@ -60,6 +75,7 @@ std::string dnsmasq_conf_text(const Profile& profile) {
       profile.ap_interface, listen);
   if (profile.dhcp_enabled) {
     text += std::format("dhcp-range={},{},{},12h\n", profile.dhcp_start, profile.dhcp_end, netmask);
+    text += fakemii_dns_text(profile);
   } else {
     text += "port=0\n";
   }
@@ -99,6 +115,18 @@ std::string nft_text(const Profile& profile) {
       "iifname \"{}\" drop\n  }}\n  chain postrouting {{\n    type nat hook postrouting priority "
       "100; policy accept;\n    iifname \"{}\" oifname \"{}\" masquerade\n  }}\n}}\n",
       input, ap, up, up, ap, ap, ap, up);
+}
+
+std::vector<std::vector<std::string>> ufw_hole_rules(std::string_view ap, std::string_view gateway) {
+  const std::string iface(ap);
+  const std::string address(gateway);
+  return {
+      {"-i", iface, "-p", "udp", "--dport", "67", "-j", "ACCEPT"},
+      {"-i", iface, "-d", address, "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
+      {"-i", iface, "-d", address, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
+      {"-i", iface, "-d", address, "-p", "tcp", "--dport", std::to_string(FAKEMII_PORT), "-m",
+       "socket", "-j", "ACCEPT"},
+  };
 }
 
 std::string iwd_profile(const Profile& profile) {

@@ -72,15 +72,10 @@ fake Nintendo 3DS connection test server for the hotspot, so a 3DS can use a net
 - not saved in the profile.
 - the popup needs a tall terminal. on a short terminal you get a one-line hint.
 
-on the 3DS: Internet Settings > Connection Settings > pick the connection > Change Settings > Proxy Settings: Yes > Detailed Setup > proxy server is the gateway IP, port 3000 > save > Test Connection.
-
-it mainly helps when the upstream is `none`. with an upstream connection the console reaches the real test server anyway.
-
-firewall: with the direct hostapd backend, hotmon opens TCP port 3000 to the gateway in its own nftables table. the rule accepts only a socket that listens on one address, as FakeMii does. other services on `0.0.0.0` port 3000 stay closed to hotspot clients. apply the wizard once after an update to get this rule. with NetworkManager or iwd, hotmon does not manage the firewall. a host firewall (such as ufw) may block port 3000.
-
-idea from FakeMii (https://github.com/Lectem/FakeMii).
+if you use pretendo network, make sure to load your NNID in ninbus. otherwise, the network test challenge is routed to a pretemdo URL, which FakeMii cannot serve against.
 
 
+method comes from the OG FakeMii: (https://github.com/Lectem/FakeMii).
 
 ## backend selection
 
