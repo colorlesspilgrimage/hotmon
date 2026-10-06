@@ -521,11 +521,8 @@ std::vector<StyledRow> fakemii_popup(const App& app, int width, const BoxChars& 
   rows.push_back(
       StyledRow{"3. Proxy server " + app.fakemii.address() + ", Port " + port + " > save.", Style::Plain});
   rows.push_back(StyledRow{"4. Test Connection.", Style::Plain});
-  rows.emplace_back();
-  rows.push_back(StyledRow{"FakeMii mainly helps when the hotspot has no upstream (upstream None). With an "
-                           "upstream connection, the console reaches the real test server anyway.",
-                           Style::Dim});
   if (app.backend != BackendKind::DirectHostapd) {
+    rows.emplace_back();
     // The firewall note names the fixed port. The firewall rule uses the same constant.
     rows.push_back(StyledRow{"hotmon opens port " + std::to_string(FAKEMII_PORT) +
                                  " in ufw. It manages no other firewall for this backend. Another host "

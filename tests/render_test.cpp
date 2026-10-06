@@ -536,7 +536,7 @@ TEST(Render, FakeMiiPopupShowsTheInstructions) {
        {std::string("FakeMii (3DS)"), std::string("SSID: Hotmon"), app.fakemii.endpoint(),
         std::string("Internet Settings"), std::string("Connection Settings"),
         std::string("Change Settings"), std::string("Proxy Settings"), std::string("Detailed Setup"),
-        std::string("Test Connection"), std::string("upstream None"),
+        std::string("Test Connection"),
         std::string("Requests served: 0"), std::string("Last request: none yet"),
         std::string("Port " + std::to_string(app.fakemii.port()))}) {
     EXPECT_NE(text.find(part), std::string::npos) << part;

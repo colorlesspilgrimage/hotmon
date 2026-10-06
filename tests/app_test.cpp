@@ -451,11 +451,13 @@ TEST(App, CancelledCaptureDoesNotStart) {
 }
 
 // Apply the sample profile. Then move the active range to loopback so FakeMii can bind.
+// FakeMii runs only without an upstream.
 App loopback_app(const std::filesystem::path& dir) {
   auto app = loaded_app(dir);
   ScriptedRunner runner;
   RecordedSignals signals;
   EXPECT_TRUE(apply_direct(app, runner, signals, local_paths(dir)));
+  app.active->upstream_interface = "none";
   app.active->address_cidr = "127.0.0.0/8";
   app.fakemii_port = 0;
   return app;
@@ -501,6 +503,18 @@ TEST(App, FakeMiiKeyNeedsARunningHotspot) {
   std::filesystem::remove_all(dir);
 }
 
+// With an upstream, the 3DS reaches the real test server. FakeMii stays off and says why.
+TEST(App, FakeMiiKeyRefusesWithAnUpstream) {
+  const auto dir = scratch_dir();
+  auto app = loopback_app(dir);
+  app.active->upstream_interface = "eth0";
+  EXPECT_EQ(app.on_key(key_char('f')), Step::Continue);
+  EXPECT_FALSE(app.fakemii.running());
+  EXPECT_NE(app.notice.find("FakeMii is not needed."), std::string::npos);
+  EXPECT_NE(app.notice.find("(eth0)"), std::string::npos);
+  std::filesystem::remove_all(dir);
+}
+
 TEST(App, FakeMiiKeyIsIgnoredInTheMonitorAndWizardViews) {
   const auto dir = scratch_dir();
   auto app = loopback_app(dir);
@@ -542,7 +556,8 @@ TEST(App, FakeMiiStopsWhenTheWizardAppliesAgain) {
   ASSERT_TRUE(apply_direct(app, runner, signals, local_paths(dir)));
   EXPECT_TRUE(app.running);
   EXPECT_FALSE(app.fakemii.running());
-  EXPECT_NE(app.notice.find("FakeMii is off"), std::string::npos);
+  // The reapplied sample profile has an upstream, so the notice does not offer FakeMii again.
+  EXPECT_EQ(app.notice, "The hotspot is active.");
   EXPECT_EQ(loopback_connect(port), -1);
   std::filesystem::remove_all(dir);
 }
@@ -570,6 +585,7 @@ TEST(App, FakeMiiBindFailureShowsANotice) {
   ScriptedRunner runner;
   RecordedSignals signals;
   ASSERT_TRUE(apply_direct(app, runner, signals, local_paths(dir)));
+  app.active->upstream_interface = "none";
   app.fakemii_port = 0;
   app.on_key(key_char('f'));
   EXPECT_FALSE(app.fakemii.running());
@@ -649,6 +665,7 @@ TEST(App, FakeMiiNeedsNoPrivilege) {
   DirectPrivilege direct(runner, signals, local_paths(dir));
   CountingPrivileged counting(direct);
   ASSERT_TRUE(app.apply_hotspot(counting));
+  app.active->upstream_interface = "none";
   app.active->address_cidr = "127.0.0.0/8";
   app.fakemii_port = 0;
   const size_t calls = runner.calls.size();

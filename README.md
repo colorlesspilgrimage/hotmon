@@ -68,6 +68,7 @@ fake Nintendo 3DS connection test server for the hotspot, so a 3DS can use a net
 - answers only `http://conntest.nintendowifi.net/`. everything else gets 404.
 - never forwards traffic. it is not a real proxy.
 - press `f` in the status view while the hotspot runs. press `f` again to stop it.
+- only for a hotspot with upstream `none`. with an upstream connection the 3DS reaches the real test server, so `f` shows a notice instead.
 - stops when the hotspot stops, when the wizard applies again, and when hotmon quits.
 - not saved in the profile.
 - the popup needs a tall terminal. on a short terminal you get a one-line hint.

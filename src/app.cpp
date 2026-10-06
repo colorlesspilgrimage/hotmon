@@ -119,7 +119,7 @@ Result<void> App::apply_hotspot(Privileged& privileged) {
   }
   if (interface_changed) {
     notice = CAPTURE_WARNING;
-  } else if (fakemii_was_on) {
+  } else if (fakemii_was_on && profile->upstream_interface == "none") {
     notice = "The hotspot is active. FakeMii is off. Press f to turn it on again.";
   } else {
     notice = "The hotspot is active.";
@@ -333,6 +333,11 @@ Step App::toggle_fakemii() {
   }
   if (!running || !active) {
     notice = "The hotspot is not active. Start the hotspot to use FakeMii.";
+    return Step::Continue;
+  }
+  if (active->upstream_interface != "none") {
+    notice = "FakeMii is not needed. The hotspot has an upstream connection (" +
+             active->upstream_interface + "), so the 3DS reaches the real connection test.";
     return Step::Continue;
   }
   auto network = active->network();
