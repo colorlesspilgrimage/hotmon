@@ -16,7 +16,7 @@ if ! command -v hotmon >/dev/null 2>&1; then
 fi
 binary="$(command -v hotmon)"
 
-# A missing or failed ldd must fail the check. It must not hide a missing library.
+# A missing ldd must fail the check. Otherwise a missing library goes unseen.
 if ! command -v ldd >/dev/null 2>&1; then
   fail "ldd is not on PATH"
 fi

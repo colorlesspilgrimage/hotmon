@@ -8,22 +8,15 @@ set -euo pipefail
 version="${1:-}"
 output_dir="${2:-}"
 
-# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
-if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
-  echo "make-source-tarball: bad version" >&2
-  exit 2
-fi
-
-if [[ -z "$output_dir" ]]; then
-  echo "make-source-tarball: output dir missing" >&2
-  exit 2
-fi
-
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "${script_dir}/../.." && pwd)"
+# shellcheck disable=SC1091
+source -- "${script_dir}/common.sh"
 
-mkdir -p -- "$output_dir"
-output_dir="$(realpath -m -- "$output_dir")"
+require_version make-source-tarball "$version"
+require_output_dir make-source-tarball "$output_dir"
+
+repo_root="$(packaging_repo_root)"
+output_dir="$(resolve_output_dir "$output_dir")"
 tarball="${output_dir}/hotmon-${version}.tar.gz"
 
 git -C "$repo_root" archive --format=tar.gz --prefix="hotmon-${version}/" -o "$tarball" HEAD

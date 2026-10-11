@@ -9,16 +9,14 @@ set -euo pipefail
 version="${1:-}"
 pkgbuild="${2:-}"
 
-# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
-if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
-  echo "update-aur-checksum: bad version" >&2
-  exit 2
-fi
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source -- "${script_dir}/common.sh"
+
+require_version update-aur-checksum "$version"
 
 if [[ -z "$pkgbuild" ]]; then
-  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-  repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-  pkgbuild="${repo_root}/packaging/aur/PKGBUILD"
+  pkgbuild="$(packaging_repo_root)/packaging/aur/PKGBUILD"
 fi
 
 if [[ ! -f "$pkgbuild" ]]; then
