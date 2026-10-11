@@ -72,9 +72,9 @@ jobs:
           - image: debian:trixie
             release: true
             artifact: package-deb
-          - image: ubuntu:24.04
+          - image: ubuntu:26.04
             release: false
-            artifact: package-deb-ubuntu-24.04
+            artifact: package-deb-ubuntu-26.04
     steps:
       - name: Install build tools
         env:

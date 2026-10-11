@@ -55,7 +55,7 @@ Check the checksum file:
 
 ### build a package
 
-The compiler needs GCC 13 or newer. Debian 12 is not supported.
+The compiler needs GCC 13 or newer. Debian 12 is not supported. Ubuntu 24.04 has no `libyyjson-dev` package. Use Ubuntu 25.10 or newer.
 
 Make the source tarball first:
 
