@@ -9,8 +9,14 @@ version="${1:-}"
 tarball="${2:-}"
 output_dir="${3:-}"
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
+if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
   echo "build-rpm: bad version" >&2
+  exit 2
+fi
+
+if [[ -z "$output_dir" ]]; then
+  echo "build-rpm: output dir missing" >&2
   exit 2
 fi
 

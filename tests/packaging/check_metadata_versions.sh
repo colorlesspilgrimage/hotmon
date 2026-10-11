@@ -17,7 +17,7 @@ if [[ ! -d "$source_dir" ]]; then
 fi
 
 version_ok() {
-  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  [[ "$1" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]
 }
 
 cmake_file="${source_dir}/CMakeLists.txt"
@@ -27,11 +27,11 @@ changelog="${source_dir}/packaging/debian/changelog"
 control="${source_dir}/packaging/debian/control"
 rules="${source_dir}/packaging/debian/rules"
 
-cmake_version="$(sed -n 's/^project(hotmon VERSION \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$cmake_file" | head -n 1)"
+cmake_version="$(sed -n 's/^project(hotmon VERSION \([0123456789][0123456789]*\.[0123456789][0123456789]*\.[0123456789][0123456789]*\).*/\1/p' "$cmake_file" | head -n 1)"
 pkg_version="$(sed -n 's/^pkgver=//p' "$pkgbuild" | head -n 1)"
 rpm_version="$(sed -n 's/^Version:[[:space:]]*//p' "$spec" | head -n 1)"
 deb_line="$(head -n 1 -- "$changelog")"
-deb_version="$(sed -n 's/^hotmon (\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)-1).*/\1/p' <<< "$deb_line")"
+deb_version="$(sed -n 's/^hotmon (\([0123456789][0123456789]*\.[0123456789][0123456789]*\.[0123456789][0123456789]*\)-1).*/\1/p' <<< "$deb_line")"
 
 for value in "$cmake_version" "$pkg_version" "$rpm_version" "$deb_version"; do
   if ! version_ok "$value"; then

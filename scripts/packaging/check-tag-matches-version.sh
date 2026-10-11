@@ -7,7 +7,8 @@ set -euo pipefail
 
 tag="${1:-}"
 
-if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
+if [[ ! "$tag" =~ ^v[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
   echo "check-tag: bad tag" >&2
   exit 2
 fi

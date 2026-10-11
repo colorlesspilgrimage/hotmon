@@ -9,8 +9,14 @@ version="${1:-}"
 tarball="${2:-}"
 output_dir="${3:-}"
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
+if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
   echo "build-deb: bad version" >&2
+  exit 2
+fi
+
+if [[ -z "$output_dir" ]]; then
+  echo "build-deb: output dir missing" >&2
   exit 2
 fi
 
@@ -28,7 +34,10 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 
-tar -xzf "$tarball" -C "$work"
+if ! tar -xzf "$tarball" -C "$work"; then
+  echo "build-deb: cannot unpack tarball" >&2
+  exit 1
+fi
 src="${work}/hotmon-${version}"
 if [[ ! -d "$src" ]]; then
   echo "build-deb: unpacked source missing" >&2
