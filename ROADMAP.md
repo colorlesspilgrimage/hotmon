@@ -2,6 +2,11 @@
 
 ## Planned
 
+### 1. Packaging and Distribution
+Packaging for major package systems (pacman, apt, rpm) and AUR package 
+distribution. CI workflows in github to verify packages. Releases on github with pre-made packages.
+
+
 ## Done
 
 ### 1. Automatic network settings in the wizard
