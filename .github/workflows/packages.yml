@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install lint tools
         run: |
           set -euo pipefail
@@ -38,6 +40,8 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Read version
         id: ver
         run: echo "version=$(scripts/packaging/read-version.sh)" >> "$GITHUB_OUTPUT"
@@ -82,6 +86,8 @@ jobs:
           apt-get update
           apt-get install -y build-essential debhelper dpkg-dev cmake pkgconf libncurses-dev libyyjson-dev libgtest-dev git ca-certificates
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download source tarball
         uses: actions/download-artifact@v4
         with:
@@ -138,6 +144,8 @@ jobs:
           set -euo pipefail
           dnf install -y rpm-build gcc-c++ cmake pkgconf-pkg-config ncurses-devel yyjson-devel gtest-devel git
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download source tarball
         uses: actions/download-artifact@v4
         with:
@@ -176,6 +184,8 @@ jobs:
           set -euo pipefail
           pacman -Syu --noconfirm --needed base-devel cmake pkgconf ncurses yyjson gtest polkit iw iproute2 git
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download source tarball
         uses: actions/download-artifact@v4
         with:

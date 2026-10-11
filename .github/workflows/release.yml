@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Check tag matches version
         env:
           TAG: ${{ github.ref_name }}
@@ -30,6 +32,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download source tarball
         uses: actions/download-artifact@v4
         with:
@@ -67,6 +71,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Read version
         id: version
         env:
@@ -98,7 +104,8 @@ jobs:
           docker run --rm -v "$PWD":/src -w /src -e VERSION="$VERSION" archlinux:latest bash -euo pipefail -c 'pacman -Syu --noconfirm --needed pacman-contrib ca-certificates && scripts/packaging/update-aur-checksum.sh "$VERSION"'
       - name: Publish AUR package
         if: steps.gate.outputs.enabled == 'true'
-        uses: KSXGitHub/github-actions-deploy-aur@v3
+        # This action gets the AUR key. Pin a commit; a tag or branch can move (CWE-829).
+        uses: KSXGitHub/github-actions-deploy-aur@a97f56a8425a7a7f3b8c58607f769c69b089cadb # v3.0.1
         with:
           pkgname: hotmon
           pkgbuild: ./packaging/aur/PKGBUILD
