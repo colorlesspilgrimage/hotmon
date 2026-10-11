@@ -57,6 +57,7 @@ for version in "${bad_versions[@]}"; do
   expect_status 2 "${scripts}/build-deb.sh" "$version" "$missing" "$probe"
   expect_status 2 "${scripts}/build-rpm.sh" "$version" "$missing" "$probe"
   expect_status 2 "${scripts}/build-pacman.sh" "$version" "$missing" "$probe"
+  expect_status 2 "${scripts}/update-aur-checksum.sh" "$version"
   if [[ -e "$probe" || -e "${work}/X" ]]; then
     fail "bad version created a file: ${version}"
   fi

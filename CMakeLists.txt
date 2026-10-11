@@ -45,3 +45,4 @@ add_test(NAME Packaging.InstallLayout COMMAND bash ${CMAKE_SOURCE_DIR}/tests/pac
 add_test(NAME Packaging.MetadataVersionsMatch COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_metadata_versions.sh ${CMAKE_SOURCE_DIR})
 add_test(NAME Packaging.ScriptsRejectBadInput COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_script_input_rules.sh ${CMAKE_SOURCE_DIR})
 add_test(NAME Packaging.WorkflowRules COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_workflow_rules.sh ${CMAKE_SOURCE_DIR})
+add_test(NAME Packaging.AurChecksumUser COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_aur_checksum_user.sh ${CMAKE_SOURCE_DIR})

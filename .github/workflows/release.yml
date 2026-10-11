@@ -94,7 +94,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          docker run --rm -v "$PWD":/src -w /src -e VERSION="$VERSION" archlinux:latest bash -euo pipefail -c 'pacman -Syu --noconfirm --needed pacman-contrib && sed -i "s/^pkgver=.*/pkgver=${VERSION}/" packaging/aur/PKGBUILD && (cd packaging/aur && updpkgsums)'
+          # makepkg exits when the user is root. The script runs the checksum tool as builder.
+          docker run --rm -v "$PWD":/src -w /src -e VERSION="$VERSION" archlinux:latest bash -euo pipefail -c 'pacman -Syu --noconfirm --needed pacman-contrib ca-certificates && scripts/packaging/update-aur-checksum.sh "$VERSION"'
       - name: Publish AUR package
         if: steps.gate.outputs.enabled == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v3
