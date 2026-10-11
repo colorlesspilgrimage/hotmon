@@ -3,7 +3,7 @@
 # Arguments: <source-dir>
 # Outputs: PASS: Packaging.WorkflowRules or FAIL: <reason>
 # Side effects: none. Runs gitleaks only when that command exists.
-# Security: CWE-94, OWASP A03, CWE-250, ASVS V1.2, CWE-532.
+# Security: CWE-94, OWASP A03, CWE-250, ASVS V1.2, CWE-532, CWE-829, CWE-522.
 set -euo pipefail
 
 source_dir="${1:-}"
@@ -30,6 +30,39 @@ reject_context() {
   local file="$2"
   if [[ "$text" == *"$ref_mark"* || "$text" == *"$event_mark"* ]]; then
     fail "${file} puts GitHub context inside a run block"
+  fi
+}
+
+# A tag or branch can move. A third-party action must use a full commit SHA.
+# Actions from the GitHub "actions" owner and local actions can use a tag.
+check_action_pins() {
+  local file="$1"
+  local line=""
+  local ref=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ ! "$line" =~ ^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*([^[:space:]#]+) ]]; then
+      continue
+    fi
+    ref="${BASH_REMATCH[2]}"
+    if [[ "$ref" == ./* || "$ref" == actions/* ]]; then
+      continue
+    fi
+    if [[ ! "$ref" =~ @[0-9a-f]{40}$ ]]; then
+      fail "${file} uses third-party action ${ref} without a commit SHA"
+    fi
+  done < "$file"
+}
+
+# actions/checkout writes GITHUB_TOKEN into .git/config unless told not to.
+# Later steps (containers, third-party actions) can then read the token.
+check_checkout_credentials() {
+  local file="$1"
+  local checkouts=0
+  local disabled=0
+  checkouts="$(grep -c 'uses: actions/checkout@' "$file" || true)"
+  disabled="$(grep -c 'persist-credentials: false' "$file" || true)"
+  if [[ "$checkouts" -ne "$disabled" ]]; then
+    fail "${file} has ${checkouts} checkout steps but ${disabled} set persist-credentials: false"
   fi
 }
 
@@ -85,6 +118,8 @@ scan_file() {
 }
 
 for file in "${files[@]}"; do
+  check_action_pins "$file"
+  check_checkout_credentials "$file"
   scan_file "$file"
 done
 

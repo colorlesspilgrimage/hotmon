@@ -3,6 +3,8 @@
 # Arguments: <version> <source-tarball> <output-dir>
 # Outputs: the package path on stdout.
 # Side effects: writes the package. As root, creates user builder.
+# As root, builder writes only into a temp dir. Root copies the package to <output-dir>.
+# Root never gives <output-dir> to builder (CWE-732).
 set -euo pipefail
 
 version="${1:-}"
@@ -32,9 +34,28 @@ if [[ "$(id -u)" -eq 0 ]]; then
   if ! id builder >/dev/null 2>&1; then
     useradd -m builder
   fi
-  chown -- builder "$output_dir"
+  builder_dest="$(mktemp -d)"
+  trap 'rm -rf -- "$builder_dest"' EXIT
+  chown -- builder "$builder_dest"
   script_path="$(realpath -- "$0")"
-  exec runuser -u builder -- "$script_path" "$version" "$tarball" "$output_dir"
+  runuser -u builder -- "$script_path" "$version" "$tarball" "$builder_dest" > /dev/null
+  shopt -s nullglob
+  built=( "${builder_dest}/hotmon-${version}-1-"*.pkg.tar.zst )
+  shopt -u nullglob
+  if [[ ${#built[@]} -eq 0 ]]; then
+    echo "build-pacman: no package file" >&2
+    exit 1
+  fi
+  for pkg in "${built[@]}"; do
+    # builder owns builder_dest. Copy regular files only, never a symlink target.
+    if [[ -L "$pkg" || ! -f "$pkg" ]]; then
+      echo "build-pacman: package is not a regular file" >&2
+      exit 1
+    fi
+    cp -- "$pkg" "${output_dir}/"
+  done
+  printf '%s\n' "${output_dir}/$(basename -- "${built[0]}")"
+  exit 0
 fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
