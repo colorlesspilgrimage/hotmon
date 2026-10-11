@@ -9,7 +9,8 @@ set -euo pipefail
 version="${1:-}"
 pkgbuild="${2:-}"
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
+if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
   echo "update-aur-checksum: bad version" >&2
   exit 2
 fi

@@ -8,8 +8,14 @@ set -euo pipefail
 version="${1:-}"
 output_dir="${2:-}"
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
+if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
   echo "make-source-tarball: bad version" >&2
+  exit 2
+fi
+
+if [[ -z "$output_dir" ]]; then
+  echo "make-source-tarball: output dir missing" >&2
   exit 2
 fi
 

@@ -23,6 +23,11 @@ trap 'rm -rf -- "$work"' EXIT
 cd -- "$work"
 missing="${work}/missing.tar.gz"
 
+# In en_US.UTF-8, bash [0-9] matches non-ASCII digits. Use that locale when it exists.
+if locale -a 2>/dev/null | grep -qix 'en_US.utf8'; then
+  export LC_ALL=en_US.UTF-8
+fi
+
 inject='$'" (touch X)"
 inject="${inject/ /}"
 bad_versions=(
@@ -36,6 +41,11 @@ bad_versions=(
   '1.0.0 '
   '-1.0.0'
   '1.0.-1'
+  $'1.0.0\n'
+  $'1.0.0\n; touch X'
+  '１.0.0'
+  '١.0.0'
+  '1.².0'
 )
 
 expect_status() {
@@ -74,12 +84,25 @@ for version in 0.0.0 10.20.30; do
   fi
 done
 
+for script_name in build-deb.sh build-rpm.sh build-pacman.sh; do
+  expect_status 2 "${scripts}/${script_name}" 1.0.0 "$missing" ''
+done
+expect_status 2 "${scripts}/make-source-tarball.sh" 1.0.0 ''
+
+broken_dir="${work}/broken"
+mkdir -p -- "$broken_dir"
+printf 'not a tarball\n' > "${broken_dir}/hotmon-1.0.0.tar.gz"
+expect_status 1 "${scripts}/build-deb.sh" 1.0.0 "${broken_dir}/hotmon-1.0.0.tar.gz" "${broken_dir}/out"
+
 bad_tags=(
   '1.0.0'
   'v1.0'
   'vx.y.z'
   'v1.0.0/../x'
   'refs/tags/v1.0.0'
+  'v１.0.0'
+  'v0.١.0'
+  $'v0.1.0\n'
 )
 for tag in "${bad_tags[@]}"; do
   expect_status 2 "${scripts}/check-tag-matches-version.sh" "$tag"
@@ -88,6 +111,17 @@ done
 read_out="$("${scripts}/read-version.sh")"
 if [[ "$read_out" != "0.1.0" ]]; then
   fail "read-version printed ${read_out}"
+fi
+
+fake_root="${work}/fake-root"
+mkdir -p -- "${fake_root}/scripts/packaging"
+cp -- "${scripts}/read-version.sh" "${fake_root}/scripts/packaging/read-version.sh"
+expect_status 1 "${fake_root}/scripts/packaging/read-version.sh"
+printf 'project(hotmon VERSION ١.0.0 LANGUAGES CXX)\n' > "${fake_root}/CMakeLists.txt"
+expect_status 1 "${fake_root}/scripts/packaging/read-version.sh"
+printf 'project(hotmon VERSION 1.2.3\r\n' > "${fake_root}/CMakeLists.txt"
+if [[ "$("${fake_root}/scripts/packaging/read-version.sh")" != "1.2.3" ]]; then
+  fail "read-version did not read a CRLF line"
 fi
 
 expect_status 0 "${scripts}/check-tag-matches-version.sh" "v${read_out}"
@@ -131,5 +165,33 @@ fi
   cd -- "$dash_dir"
   sha256sum -c SHA256SUMS
 )
+
+newline_dir="${work}/newline"
+mkdir -p -- "$newline_dir"
+: > "${newline_dir}/a"$'\n'"b.deb"
+: > "${newline_dir}/b.rpm"
+: > "${newline_dir}/c.pkg.tar.zst"
+: > "${newline_dir}/d.tar.gz"
+"${scripts}/make-checksums.sh" "$newline_dir"
+(
+  cd -- "$newline_dir"
+  sha256sum -c SHA256SUMS
+)
+
+keep_dir="${work}/keep"
+mkdir -p -- "$keep_dir"
+: > "${keep_dir}/b.rpm"
+: > "${keep_dir}/c.pkg.tar.zst"
+: > "${keep_dir}/d.tar.gz"
+ln -s -- "${keep_dir}/no-such-file" "${keep_dir}/a.deb"
+printf 'old\n' > "${keep_dir}/SHA256SUMS"
+expect_status 1 "${scripts}/make-checksums.sh" "$keep_dir"
+if [[ "$(cat -- "${keep_dir}/SHA256SUMS")" != "old" ]]; then
+  fail "a failed hash changed SHA256SUMS"
+fi
+leftover=( "${keep_dir}"/.SHA256SUMS.* )
+if [[ -e "${leftover[0]}" ]]; then
+  fail "a failed hash left a temp file"
+fi
 
 echo "PASS: Packaging.ScriptsRejectBadInput"

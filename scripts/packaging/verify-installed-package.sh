@@ -2,6 +2,7 @@
 # Purpose: Check that an installed hotmon binary starts and links.
 # Arguments: none.
 # Outputs: PASS: installed package works
+# Exit codes: 0 on pass. 1 on any failed check, a missing ldd, or a failed ldd.
 # Side effects: runs the installed hotmon binary.
 set -euo pipefail
 
@@ -13,9 +14,17 @@ fail() {
 if ! command -v hotmon >/dev/null 2>&1; then
   fail "hotmon is not on PATH"
 fi
-
 binary="$(command -v hotmon)"
-if ldd "$binary" | grep -F 'not found' >/dev/null; then
+
+# A missing or failed ldd must fail the check. It must not hide a missing library.
+if ! command -v ldd >/dev/null 2>&1; then
+  fail "ldd is not on PATH"
+fi
+ldd_output=""
+if ! ldd_output="$(ldd -- "$binary" 2>&1)"; then
+  fail "ldd failed for ${binary}"
+fi
+if [[ "$ldd_output" == *"not found"* ]]; then
   fail "ldd reports a missing library"
 fi
 
@@ -28,8 +37,9 @@ if [[ "$status" -ne 2 ]]; then
   fail "hotmon extra-argument exited ${status}, want 2"
 fi
 
+# Command substitution removes the trailing newline of the usage line.
 actual="$(cat -- "$stderr_file")"
-if [[ "$actual" != "Usage: hotmon" && "$actual" != $'Usage: hotmon\n' ]]; then
+if [[ "$actual" != "Usage: hotmon" ]]; then
   fail "stderr is not Usage: hotmon"
 fi
 
