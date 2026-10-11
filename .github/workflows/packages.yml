@@ -1,0 +1,204 @@
+# Build each package and test the install.
+name: packages
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint-scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install lint tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck python3-yaml python-is-python3
+      - name: Shellcheck
+        run: shellcheck --shell=bash scripts/packaging/*.sh tests/packaging/*.sh
+      - name: Parse workflow YAML
+        run: python -c "import sys,yaml;[yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/*.yml
+      - name: Workflow rules
+        run: tests/packaging/check_workflow_rules.sh .
+
+  source-tarball:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: ver
+        run: echo "version=$(scripts/packaging/read-version.sh)" >> "$GITHUB_OUTPUT"
+      - name: Make source tarball
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/packaging/make-source-tarball.sh "$VERSION" dist
+      - name: Upload source tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-tarball
+          path: dist/hotmon-*.tar.gz
+          if-no-files-found: error
+
+  build-deb:
+    needs: source-tarball
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:trixie
+            release: true
+            artifact: package-deb
+          - image: ubuntu:24.04
+            release: false
+            artifact: package-deb-ubuntu-24.04
+    steps:
+      - name: Install build tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          if [ -f /etc/os-release ] && grep -q '^ID=ubuntu$' /etc/os-release; then
+            apt-get update
+            apt-get install -y ca-certificates software-properties-common
+            add-apt-repository -y universe
+          fi
+          apt-get update
+          apt-get install -y build-essential debhelper dpkg-dev cmake pkgconf libncurses-dev libyyjson-dev libgtest-dev git ca-certificates
+      - uses: actions/checkout@v4
+      - name: Download source tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: source-tarball
+          path: dist
+      - name: Build deb
+        env:
+          VERSION: ${{ needs.source-tarball.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="$(find dist -name 'hotmon-*.tar.gz' -print -quit)"
+          test -n "$tarball"
+          scripts/packaging/build-deb.sh "$VERSION" "$tarball" dist
+      - name: Inspect package
+        run: |
+          set -euo pipefail
+          deb="$(find dist -name 'hotmon_*.deb' -print -quit)"
+          test -n "$deb"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb" | grep -F './usr/bin/hotmon'
+      - name: Install and verify
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          deb="$(find dist -name 'hotmon_*.deb' -print -quit)"
+          test -n "$deb"
+          apt-get install -y "./${deb}"
+          scripts/packaging/verify-installed-package.sh
+      - name: Note release artifact
+        env:
+          RELEASE_BUILD: ${{ matrix.release }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_BUILD" = "true" ]; then
+            echo "This deb is attached to GitHub releases."
+          else
+            echo "This deb is a CI check only."
+          fi
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/hotmon_*.deb
+          if-no-files-found: error
+
+  build-rpm:
+    needs: source-tarball
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    steps:
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          dnf install -y rpm-build gcc-c++ cmake pkgconf-pkg-config ncurses-devel yyjson-devel gtest-devel git
+      - uses: actions/checkout@v4
+      - name: Download source tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: source-tarball
+          path: dist
+      - name: Build rpm
+        env:
+          VERSION: ${{ needs.source-tarball.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="$(find dist -name 'hotmon-*.tar.gz' -print -quit)"
+          test -n "$tarball"
+          scripts/packaging/build-rpm.sh "$VERSION" "$tarball" dist
+      - name: Inspect and install
+        run: |
+          set -euo pipefail
+          rpm_file="$(find dist -name 'hotmon-*.rpm' -print -quit)"
+          test -n "$rpm_file"
+          rpm -qpl "$rpm_file" | grep -F '/usr/bin/hotmon'
+          dnf install -y "./${rpm_file}"
+          scripts/packaging/verify-installed-package.sh
+      - name: Upload rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-rpm
+          path: dist/hotmon-*.rpm
+          if-no-files-found: error
+
+  build-pacman:
+    needs: source-tarball
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed base-devel cmake pkgconf ncurses yyjson gtest polkit iw iproute2 git
+      - uses: actions/checkout@v4
+      - name: Download source tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: source-tarball
+          path: dist
+      - name: Build pacman package
+        env:
+          VERSION: ${{ needs.source-tarball.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="$(find dist -name 'hotmon-*.tar.gz' -print -quit)"
+          test -n "$tarball"
+          scripts/packaging/build-pacman.sh "$VERSION" "$tarball" dist
+      - name: Install and verify
+        run: |
+          set -euo pipefail
+          pkg="$(find dist -name 'hotmon-*.pkg.tar.zst' -print -quit)"
+          test -n "$pkg"
+          pacman -U --noconfirm "$pkg"
+          scripts/packaging/verify-installed-package.sh
+      - name: Upload pacman package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-pacman
+          path: dist/hotmon-*.pkg.tar.zst
+          if-no-files-found: error

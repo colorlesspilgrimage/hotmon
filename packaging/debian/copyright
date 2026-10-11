@@ -1,0 +1,9 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: hotmon
+Upstream-Contact: colorlesspilgrimage <colorlesspilgrimage@users.noreply.github.com>
+Source: https://github.com/colorlesspilgrimage/hotmon
+
+Files: *
+Copyright: 2026 colorlesspilgrimage
+License: LicenseRef-unspecified
+ No license has been chosen by the upstream author.

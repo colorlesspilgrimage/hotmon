@@ -1,0 +1,109 @@
+# Publish packages for a version tag.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+jobs:
+  check-tag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/packaging/check-tag-matches-version.sh "$TAG"
+
+  packages:
+    needs: check-tag
+    uses: ./.github/workflows/packages.yml
+
+  publish:
+    needs: packages
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download source tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: source-tarball
+          path: release-in/source-tarball
+      - name: Download deb
+        uses: actions/download-artifact@v4
+        with:
+          name: package-deb
+          path: release-in/package-deb
+      - name: Download rpm
+        uses: actions/download-artifact@v4
+        with:
+          name: package-rpm
+          path: release-in/package-rpm
+      - name: Download pacman package
+        uses: actions/download-artifact@v4
+        with:
+          name: package-pacman
+          path: release-in/package-pacman
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find release-in -type f -exec cp -t release {} +
+          scripts/packaging/make-checksums.sh release
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" release/* --title "$TAG" --generate-notes --verify-tag
+
+  publish-aur:
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          scripts/packaging/check-tag-matches-version.sh "$TAG"
+          version="${TAG#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Gate AUR publish
+        id: gate
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AUR_SSH_PRIVATE_KEY is not set. Skip AUR publish."
+          fi
+      - name: Update PKGBUILD checksum
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD":/src -w /src -e VERSION="$VERSION" archlinux:latest bash -euo pipefail -c 'pacman -Syu --noconfirm --needed pacman-contrib && sed -i "s/^pkgver=.*/pkgver=${VERSION}/" packaging/aur/PKGBUILD && (cd packaging/aur && updpkgsums)'
+      - name: Publish AUR package
+        if: steps.gate.outputs.enabled == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v3
+        with:
+          pkgname: hotmon
+          pkgbuild: ./packaging/aur/PKGBUILD
+          commit_username: colorlesspilgrimage
+          commit_email: colorlesspilgrimage@users.noreply.github.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update to ${{ steps.version.outputs.version }}
+          test: true
+          test_flags: "--clean --cleanbuild"

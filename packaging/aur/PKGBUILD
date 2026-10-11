@@ -1,0 +1,34 @@
+# Maintainer: colorlesspilgrimage
+pkgname=hotmon
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Terminal UI for creating and managing wireless hotspots'
+arch=('x86_64' 'aarch64')
+url='https://github.com/colorlesspilgrimage/hotmon'
+license=('custom:unspecified')
+depends=('ncurses' 'yyjson' 'polkit' 'iw' 'iproute2')
+makedepends=('cmake' 'pkgconf' 'gtest')
+optdepends=(
+  'networkmanager: NetworkManager backend'
+  'iwd: iwd backend'
+  'hostapd: hostapd backend'
+  'dnsmasq: hostapd backend DHCP'
+  'nftables: hostapd backend firewall'
+)
+options=('!debug')
+source=("hotmon-${pkgver}.tar.gz::${HOTMON_SOURCE_URL:-${url}/archive/v${pkgver}.tar.gz}")
+sha256sums=('SKIP')
+
+build() {
+  cmake -S "hotmon-${pkgver}" -B build -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build build
+}
+
+check() {
+  # Run every test. Exclude a test only when a clean container lacks a host tool.
+  ctest --test-dir build --output-on-failure
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}

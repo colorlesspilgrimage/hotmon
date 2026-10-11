@@ -1,0 +1,15 @@
+Source: hotmon
+Section: net
+Priority: optional
+Maintainer: colorlesspilgrimage <colorlesspilgrimage@users.noreply.github.com>
+Standards-Version: 4.6.2
+Build-Depends: debhelper-compat (= 13), g++ (>= 4:13), cmake (>= 3.20), pkgconf, libncurses-dev, libyyjson-dev, libgtest-dev
+Homepage: https://github.com/colorlesspilgrimage/hotmon
+
+Package: hotmon
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, pkexec, iw, iproute2
+Recommends: network-manager
+Suggests: iwd, hostapd, nftables, dnsmasq
+Description: Terminal UI for creating and managing wireless hotspots
+ hotmon creates a wireless hotspot and shows devices on it.

@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(hotmon LANGUAGES CXX)
+project(hotmon VERSION 0.1.0 LANGUAGES CXX)
+
+include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,9 +32,16 @@ add_executable(hotmon src/main.cpp)
 target_link_libraries(hotmon PRIVATE hotmon_core)
 target_compile_options(hotmon PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+install(TARGETS hotmon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+
 file(GLOB HOTMON_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/*.cpp")
 add_executable(hotmon_tests ${HOTMON_TEST_SOURCES})
 target_link_libraries(hotmon_tests PRIVATE hotmon_core GTest::gtest_main)
 target_compile_options(hotmon_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_compile_definitions(hotmon_tests PRIVATE HOTMON_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 gtest_discover_tests(hotmon_tests)
+add_test(NAME Packaging.InstallLayout COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_install_layout.sh ${CMAKE_BINARY_DIR} ${CMAKE_SOURCE_DIR})
+add_test(NAME Packaging.MetadataVersionsMatch COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_metadata_versions.sh ${CMAKE_SOURCE_DIR})
+add_test(NAME Packaging.ScriptsRejectBadInput COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_script_input_rules.sh ${CMAKE_SOURCE_DIR})
+add_test(NAME Packaging.WorkflowRules COMMAND bash ${CMAKE_SOURCE_DIR}/tests/packaging/check_workflow_rules.sh ${CMAKE_SOURCE_DIR})

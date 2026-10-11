@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+# dh_auto_test runs ctest. Exclude a test only when a clean container lacks a host tool.
+
+%:
+	dh $@ --buildsystem=cmake
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DCMAKE_BUILD_TYPE=Release
