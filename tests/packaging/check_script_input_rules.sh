@@ -116,6 +116,7 @@ fi
 fake_root="${work}/fake-root"
 mkdir -p -- "${fake_root}/scripts/packaging"
 cp -- "${scripts}/read-version.sh" "${fake_root}/scripts/packaging/read-version.sh"
+cp -- "${scripts}/common.sh" "${fake_root}/scripts/packaging/common.sh"
 expect_status 1 "${fake_root}/scripts/packaging/read-version.sh"
 printf 'project(hotmon VERSION ١.0.0 LANGUAGES CXX)\n' > "${fake_root}/CMakeLists.txt"
 expect_status 1 "${fake_root}/scripts/packaging/read-version.sh"

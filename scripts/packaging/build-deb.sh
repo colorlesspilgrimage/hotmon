@@ -9,28 +9,17 @@ version="${1:-}"
 tarball="${2:-}"
 output_dir="${3:-}"
 
-# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
-if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
-  echo "build-deb: bad version" >&2
-  exit 2
-fi
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source -- "${script_dir}/common.sh"
 
-if [[ -z "$output_dir" ]]; then
-  echo "build-deb: output dir missing" >&2
-  exit 2
-fi
-
-if [[ ! -f "$tarball" ]]; then
-  echo "build-deb: tarball not found" >&2
-  exit 3
-fi
+require_version build-deb "$version"
+require_output_dir build-deb "$output_dir"
+require_tarball build-deb "$tarball"
 
 tarball="$(realpath -- "$tarball")"
-mkdir -p -- "$output_dir"
-output_dir="$(realpath -m -- "$output_dir")"
-
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "${script_dir}/../.." && pwd)"
+output_dir="$(resolve_output_dir "$output_dir")"
+repo_root="$(packaging_repo_root)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 

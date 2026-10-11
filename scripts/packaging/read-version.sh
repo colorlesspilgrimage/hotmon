@@ -6,11 +6,13 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-cmake_file="${repo_root}/CMakeLists.txt"
+# shellcheck disable=SC1091
+source -- "${script_dir}/common.sh"
+
+cmake_file="$(packaging_repo_root)/CMakeLists.txt"
 version=""
 
-# In UTF-8 locales, bash [0-9] can match non-ASCII digits. Use the ASCII digit list.
+# The project line may end with CRLF. The regex accepts any non-digit after the version.
 if [[ -f "$cmake_file" ]]; then
   while IFS= read -r line; do
     if [[ "$line" =~ ^project\(hotmon\ VERSION\ ([0123456789]+\.[0123456789]+\.[0123456789]+)([^0123456789]|$) ]]; then
@@ -20,7 +22,7 @@ if [[ -f "$cmake_file" ]]; then
   done < "$cmake_file"
 fi
 
-if [[ ! "$version" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]]; then
+if ! version_is_valid "$version"; then
   echo "read-version: version not found" >&2
   exit 1
 fi
