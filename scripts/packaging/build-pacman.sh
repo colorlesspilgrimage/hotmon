@@ -42,10 +42,35 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 
+# Print a path as a file URL path. curl rejects a raw space, '#', '?' or '%' in a URL.
+# Keeps ASCII letters, digits, and "/._~-". Encodes every other byte as %XX.
+encode_url_path() {
+  local LC_ALL=C
+  local text="$1"
+  local encoded=""
+  local byte=""
+  local hex=""
+  local index=0
+  for (( index = 0; index < ${#text}; index++ )); do
+    byte="${text:index:1}"
+    case "$byte" in
+      [abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._~-])
+        encoded+="$byte"
+        ;;
+      *)
+        printf -v hex '%%%02X' "'${byte}"
+        encoded+="$hex"
+        ;;
+    esac
+  done
+  printf '%s' "$encoded"
+}
+
+tarball_url="file://$(encode_url_path "$tarball")"
 cp -- "${repo_root}/packaging/aur/PKGBUILD" "${work}/PKGBUILD"
 (
   cd -- "$work"
-  env HOTMON_SOURCE_URL="file://${tarball}" PKGDEST="$output_dir" makepkg --force --skipinteg
+  env HOTMON_SOURCE_URL="$tarball_url" PKGDEST="$output_dir" makepkg --force --skipinteg
 )
 
 shopt -s nullglob

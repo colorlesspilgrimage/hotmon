@@ -119,7 +119,27 @@ cat > "${plain}/updpkgsums" <<'EOF'
 echo "ran-direct" >> "$HOTMON_STUB_LOG"
 sed -i -- "s/sha256sums=('abc')/sha256sums=('def')/" "$1"
 EOF
-chmod +x "${plain}/updpkgsums"
+# ctest can run as root in a package build. Stub id, useradd and runuser so the
+# non-root case never changes users on the build host.
+cat > "${plain}/id" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "-u" ]]; then
+  echo 1000
+  exit 0
+fi
+exit 1
+EOF
+cat > "${plain}/useradd" <<'EOF'
+#!/bin/bash
+echo "useradd $*" >> "$HOTMON_STUB_LOG"
+exit 1
+EOF
+cat > "${plain}/runuser" <<'EOF'
+#!/bin/bash
+echo "runuser $*" >> "$HOTMON_STUB_LOG"
+exit 1
+EOF
+chmod +x "${plain}/updpkgsums" "${plain}/id" "${plain}/useradd" "${plain}/runuser"
 : > "$log"
 PATH="${plain}:${PATH}" HOTMON_STUB_LOG="$log" "$script" "1.2.3" "$pkg"
 if ! grep -q '^pkgver=1.2.3$' "$pkg"; then
@@ -133,6 +153,9 @@ if ! grep -q 'ran-direct' "$log"; then
 fi
 if grep -q 'runuser' "$log"; then
   fail "non-root path called runuser"
+fi
+if grep -q 'useradd' "$log"; then
+  fail "non-root path called useradd"
 fi
 
 echo "PASS: Packaging.AurChecksumUser"
