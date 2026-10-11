@@ -2,9 +2,7 @@
 
 ## Planned
 
-### 1. Packaging and Distribution
-Packaging for major package systems (pacman, apt, rpm) and AUR package 
-distribution. CI workflows in github to verify packages. Releases on github with pre-made packages.
+Nothing planned.
 
 
 ## Done
@@ -33,3 +31,9 @@ Press `f` in the status view to turn it on or off.
 A 3DS can then use the hotspot without real internet.
 A popup shows the proxy address and the steps on the 3DS.
 Reference: https://github.com/Lectem/FakeMii
+
+### 5. Packaging and distribution
+
+hotmon ships as a pacman package, a Debian package, and an RPM package.
+GitHub CI builds each package and tests the install.
+A version tag publishes the packages and can update the AUR package.

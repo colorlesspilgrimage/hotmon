@@ -35,6 +35,40 @@ per distro packages below.
 | dnsmasq | `dnsmasq` | `dnsmasq` | `dnsmasq` | `dnsmasq` |
 
 
+## install
+
+Install the AUR package:
+
+`yay -S hotmon`
+
+Or install a release file:
+
+`sudo apt install ./hotmon_<version>-1_amd64.deb`
+
+`sudo dnf install ./hotmon-<version>-1.<dist>.x86_64.rpm`
+
+`sudo pacman -U hotmon-<version>-1-x86_64.pkg.tar.zst`
+
+Check the checksum file:
+
+`sha256sum -c --ignore-missing SHA256SUMS`
+
+### build a package
+
+The compiler needs GCC 13 or newer. Debian 12 is not supported. Ubuntu 24.04 has no `libyyjson-dev` package. Use Ubuntu 25.10 or newer.
+
+Make the source tarball first:
+
+`scripts/packaging/make-source-tarball.sh 0.1.0 dist`
+
+Then run one build script. Use Debian for the deb, Fedora for the rpm, and Arch for the pacman package.
+
+`scripts/packaging/build-deb.sh 0.1.0 dist/hotmon-0.1.0.tar.gz dist`
+
+`scripts/packaging/build-rpm.sh 0.1.0 dist/hotmon-0.1.0.tar.gz dist`
+
+`scripts/packaging/build-pacman.sh 0.1.0 dist/hotmon-0.1.0.tar.gz dist`
+
 ## build
 
 ```

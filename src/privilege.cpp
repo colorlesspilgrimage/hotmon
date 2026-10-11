@@ -293,7 +293,10 @@ bool add_profile(yyjson_mut_doc* doc, yyjson_mut_val* root, const Profile& profi
   return yyjson_mut_obj_add_val(doc, root, "profile", copy);
 }
 
-Result<void> field_type_error(yyjson_val* root, const char* key, bool (*ok)(yyjson_val*)) {
+// The predicate is a template parameter. Newer yyjson takes a const pointer in yyjson_is_*.
+// Older yyjson takes a non-const pointer. A template accepts both.
+template <typename TypePredicate>
+Result<void> field_type_error(yyjson_val* root, const char* key, TypePredicate ok) {
   yyjson_val* value = yyjson_obj_get(root, key);
   if (value != nullptr && !ok(value)) {
     return unexpected_text(std::string("The request ") + key + " has the wrong type.");
