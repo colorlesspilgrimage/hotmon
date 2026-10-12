@@ -109,7 +109,7 @@ for tag in "${bad_tags[@]}"; do
 done
 
 read_out="$("${scripts}/read-version.sh")"
-if [[ "$read_out" != "0.1.0" ]]; then
+if [[ "$read_out" != "0.1.1" ]]; then
   fail "read-version printed ${read_out}"
 fi
 
