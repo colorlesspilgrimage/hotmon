@@ -1,8 +1,8 @@
 Name: hotmon
-Version: 0.1.0
+Version: 0.1.1
 Release: 1%{?dist}
 Summary: Terminal UI for creating and managing wireless hotspots
-License: LicenseRef-unspecified
+License: MIT
 URL: https://github.com/colorlesspilgrimage/hotmon
 Source0: %{name}-%{version}.tar.gz
 
@@ -29,9 +29,13 @@ Terminal UI for creating and managing wireless hotspots.
 %cmake_install
 
 %files
+%license LICENSE
 %{_bindir}/hotmon
 %{_docdir}/hotmon/README.md
 
 %changelog
+* Sun Oct 11 2026 colorlesspilgrimage <colorlesspilgrimage@users.noreply.github.com> - 0.1.1-1
+- License under MIT.
+
 * Sun Oct 11 2026 colorlesspilgrimage <colorlesspilgrimage@users.noreply.github.com> - 0.1.0-1
 - Initial release.

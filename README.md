@@ -59,15 +59,15 @@ The compiler needs GCC 13 or newer. Debian 12 is not supported. Ubuntu 24.04 has
 
 Make the source tarball first:
 
-`scripts/packaging/make-source-tarball.sh 0.1.0 dist`
+`scripts/packaging/make-source-tarball.sh 0.1.1 dist`
 
 Then run one build script. Use Debian for the deb, Fedora for the rpm, and Arch for the pacman package.
 
-`scripts/packaging/build-deb.sh 0.1.0 dist/hotmon-0.1.0.tar.gz dist`
+`scripts/packaging/build-deb.sh 0.1.1 dist/hotmon-0.1.1.tar.gz dist`
 
-`scripts/packaging/build-rpm.sh 0.1.0 dist/hotmon-0.1.0.tar.gz dist`
+`scripts/packaging/build-rpm.sh 0.1.1 dist/hotmon-0.1.1.tar.gz dist`
 
-`scripts/packaging/build-pacman.sh 0.1.0 dist/hotmon-0.1.0.tar.gz dist`
+`scripts/packaging/build-pacman.sh 0.1.1 dist/hotmon-0.1.1.tar.gz dist`
 
 ## build
 

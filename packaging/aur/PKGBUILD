@@ -1,13 +1,14 @@
-# Maintainer: colorlesspilgrimage
+# Maintainer: Samuel Hood <colorlesspilgrimage at users dot noreply dot github dot com>
 pkgname=hotmon
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
-pkgdesc='Terminal UI for creating and managing wireless hotspots'
+pkgdesc='Terminal UI for creating and managing wireless hotspots, monitoring devices, and capturing packets'
 arch=('x86_64' 'aarch64')
 url='https://github.com/colorlesspilgrimage/hotmon'
-license=('custom:unspecified')
-depends=('ncurses' 'yyjson' 'polkit' 'iw' 'iproute2')
-makedepends=('cmake' 'pkgconf' 'gtest')
+license=('MIT')
+depends=('glibc' 'libgcc' 'libstdc++' 'ncurses' 'yyjson' 'polkit' 'iw' 'iproute2')
+# gtest is a makedepend, not a checkdepend: CMakeLists.txt calls find_package(GTest REQUIRED)
+makedepends=('cmake' 'gtest')
 optdepends=(
   'networkmanager: NetworkManager backend'
   'iwd: iwd backend'
@@ -15,20 +16,25 @@ optdepends=(
   'dnsmasq: hostapd backend DHCP'
   'nftables: hostapd backend firewall'
 )
-options=('!debug')
-source=("hotmon-${pkgver}.tar.gz::${HOTMON_SOURCE_URL:-${url}/archive/v${pkgver}.tar.gz}")
+# HOTMON_SOURCE_URL lets scripts/packaging/build-pacman.sh build from a local tarball in CI.
+# The published AUR copy uses the plain release URL.
+source=("${pkgname}-${pkgver}.tar.gz::${HOTMON_SOURCE_URL:-${url}/archive/v${pkgver}.tar.gz}")
+# The release workflow fills this in with scripts/packaging/update-aur-checksum.sh.
 sha256sums=('SKIP')
 
 build() {
-  cmake -S "hotmon-${pkgver}" -B build -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr
+  cmake -S "${pkgname}-${pkgver}" -B build \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -Wno-dev
   cmake --build build
 }
 
 check() {
-  # Run every test. Exclude a test only when a clean container lacks a host tool.
   ctest --test-dir build --output-on-failure
 }
 
 package() {
   DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "${pkgname}-${pkgver}/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname/"
 }
